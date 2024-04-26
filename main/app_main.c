@@ -34,24 +34,6 @@
 #define APP_ARC_SIZE              50
 
 /* Global Vars */
-typedef enum {
-    FULL_ARC = 0,
-    PARTIAL_ARC
-} app_arc_t;
-
-typedef enum {
-    ARC0 = 0,
-    ARC1,
-    ARC2,
-    ARC3
-} app_arc_names_t;
-
-typedef enum {
-    BAT_EMPTY = -1,
-    BAT_LOW = 0,
-    BAT_MED,
-    BAT_FULL
-} battery_states_t;
 
 static battery_states_t batteryState = BAT_LOW;
 
@@ -123,6 +105,8 @@ static void txTask(void *arg) {
     static uint8_t temp_elevPos = 0;
     static uint8_t temp_potc_counts = 0;
     static uint8_t temp_potd_counts = 0;
+
+    // use some switch case and simple assignment to classify which code should be sent based on running system state
     
     while (1) {
         //if (xQueueReceive(sendData(TX_TASK_TAG, "Hello world") == pdTrue)) {}
