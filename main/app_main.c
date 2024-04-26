@@ -14,6 +14,7 @@
     https://docs.lvgl.io/8.3/index.html
     https://github.com/lvgl/lvgl_esp32_drivers (these were ported from an existing fork, see VitorAlho on github)
     https://github.com/DavidAntliff/esp32-rotary-encoder
+    https://github.com/khoih-prog/ESP32_New_TimerInterrupt/tree/main was inspiration behind timer interrupts (unfortunately confused by the documentation so the attempted cpp -> c port was unsusccessful)
 //==================================================================================================*/
 
 /*============================================= INCLUDES ===========================================*/
@@ -21,21 +22,16 @@
 #include "app_include/app_utility.h"    /* Application universal includes and some utility functions */
 #include "app_include/app_adc.h"        /* ADC driver application specific code */
 #include "app_include/app_uart2.h"      /* UART2 driver application specific code */
-#include "app_include/app_gpio.h"       /* GPIO driver specific code */
-#include "app_include/app_spi.h"    /* SPI driver application specific code and LVGL related */
+#include "app_include/app_gpio.h"       /* GPIO driver application specific code */
+#include "app_include/app_spi.h"        /* SPI driver application specific code and LVGL/display related */
 #include "app_include/app_encoder.h"    /* Rotary encoder driver application specific code */
+#include "app_include/app_timer.h"      /* Provide hardware timer units for measuring button actuation durations. Expand possibilities of user input with dedicated keys (2x encoder switches) */
+#include "app_include/app_bluetooth.h"  /* Bluetooth peripheral application specific code. Nothing implemented yet. A bit nervous for the impending overhead. */
 
 /*========================== CONSTANTS, MACROS, AND VARIABLE DECLARATIONS ==========================*/
 
 #define ANIM_PERIOD_MS            7000
 #define APP_ARC_SIZE              50
-#define SCALE_VBAT(X)             (float)(X * 4 * 0.001)
-#define PCT_MIN                   0
-#define PCT_MAX                   100
-#define ADC_MAX                   1100
-#define ADC_MIN                   100
-#define SCALE_VPOT(X)             (int)((((X - ADC_MIN) * (PCT_MAX - PCT_MIN))/(float)(ADC_MAX - ADC_MIN)) + PCT_MIN)
-#define SCALE_VPOT_INVERT(X)      (int)(PCT_MAX - (((X - ADC_MIN) * (PCT_MAX - PCT_MIN))/(float)(ADC_MAX - ADC_MIN)));
 
 /* Global Vars */
 typedef enum {
@@ -58,9 +54,6 @@ typedef enum {
 } battery_states_t;
 
 static battery_states_t batteryState = BAT_LOW;
-
-uint32_t knobColors[2] = {APP_COLOR_UNH_GOLD, APP_COLOR_RED}; // SWITCH RELEASED COLOR , SWITCH PRESSED COLOR
-uint32_t batteryColors[3] = {APP_COLOR_RED, APP_COLOR_UNH_GOLD, APP_COLOR_PCB_GREEN_ALT};
 
 /* Creates a semaphore to handle concurrent call to lvgl stuff
  * If you wish to call *any* lvgl function from other threads/tasks
@@ -103,20 +96,14 @@ int vpotc_raw = 0;
 int vpotc_cali = 0;
 int vpotc_pct = 0;
 
-typedef struct {
-    int count;
-    int sum;
-    int buff[10];
-    int buff_len;
-    bool bufferFullFlag;
-} adc_filter_t;
-//try out adjustable length for the above so smaller buffers have no need to pass so much info 
-
 adc_filter_t vbat_filt = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false};
 adc_filter_t vpotd_filt = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false};
 adc_filter_t vpotc_filt = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false}; // Try automatically getting length with sizeof(arr)/sizeof(firstEl)(this requires predeclaring an array and passing to the struct which I am not sure is possible)
 
 disp_backlight_h bl;
+
+volatile bool timer0Flag = false;
+volatile bool timer1Flag = false;
 
 /*================================ FUNCTION AND TASK DEFINITIONS ===================================*/
 
@@ -127,15 +114,34 @@ static void txTask(void *arg) {
 
     static const char * TX_TASK_TAG = "TX_TASK";
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
-    const char * data = "Poop!";
 
+    char * txData = (char *) malloc(TX_BUF_SIZE + 1);
+
+    // both encoders should spit out counts between +=30
+    // both pots -> might want to filter the adc counts, and then scale via bit shift (12 bit to 8 bit?)
+    static uint8_t temp_azimuthPos = 0;
+    static uint8_t temp_elevPos = 0;
+    static uint8_t temp_potc_counts = 0;
+    static uint8_t temp_potd_counts = 0;
+    
     while (1) {
         //if (xQueueReceive(sendData(TX_TASK_TAG, "Hello world") == pdTrue)) {}
-        const int len = strlen(data);
-        const int txBytes = uart_write_bytes(UART_NUM_2, data, len);
-        ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes", txBytes);
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+
+        if (posA != temp_azimuthPos || posB != temp_elevPos || vpotc_pct != temp_potc_counts || vpotd_pct != temp_potd_counts) {
+            sprintf(txData,"%02X%02X%02X%02X", temp_azimuthPos, temp_elevPos, temp_potc_counts, temp_potd_counts);
+            const int len = strlen(txData);
+            const int txBytes = uart_write_bytes(UART_NUM_2, txData, len);
+            ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s'", txBytes, txData);
+            temp_azimuthPos = posA;
+            temp_elevPos = posB;
+            temp_potc_counts = vpotc_pct;
+            temp_potd_counts = vpotd_pct;
+        }
+
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
+
+    free(txData);
 }
 
 /*---------------------------------------------------------------
@@ -145,14 +151,13 @@ static void rxTask(void *arg) {
 
     static const char * RX_TASK_TAG = "RX_TASK";
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
-    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE+1);
+    uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE + 1);
 
     while (1) {
-        const int rxBytes = uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, 1000 / portTICK_PERIOD_MS);
+        const int rxBytes = uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, 10 / portTICK_PERIOD_MS);
         if (rxBytes > 0) {
             data[rxBytes] = 0;
             ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", rxBytes, data);
-            ESP_LOG_BUFFER_HEXDUMP(RX_TASK_TAG, data, rxBytes, ESP_LOG_INFO);
         }
     }
 
@@ -811,6 +816,14 @@ static void encBTask(void * handle) {
     }
 }
 
+static void gptimer0_callback(void) {
+    timer0Flag = true;
+}
+
+static void gptimer1_callback(void) {
+    timer1Flag = true;
+}
+
 /*============================================ APP_MAIN ============================================*/
 
 /*---------------------------------------------------------------
@@ -823,12 +836,40 @@ static void encBTask(void * handle) {
 void app_main(void) {
 
     static const char * TAG = "APP_MAIN";
+    esp_err_t ret = ESP_OK;
 
     // Init UART2 for development port (to be replaced with BT)
     uart2_init(U2_BAUD);
     app_gpio_init();
     gpio_set_level(LOWBATT_LED_PIN, 1);
     
+    gptimer_handle_t gptimer0 = NULL;
+    gptimer_handle_t gptimer1 = NULL;
+
+    gptimer_state_t gptimer0_state = {
+        .timerHandle = &gptimer0,
+        .running = false
+    };
+
+    gptimer_state_t gptimer1_state = {
+        .timerHandle = &gptimer0,
+        .running = false
+    };
+
+    ret = app_initTimer(&gptimer0, gptimer0_callback, 100, false);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Couldn't initialize timer!");
+    }
+
+    ret = app_initTimer(&gptimer1, gptimer1_callback, 750, false);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Couldn't initialize timer!");
+    }
+
+    // GRRR! Im using lots of globals. I hate embedded!
+    app_toggleTimerRun(&gptimer0, &gptimer0_state);
+    app_toggleTimerRun(&gptimer1, &gptimer1_state);
+
     // Create FreeRTOS tasks to handle various peripherals/functions
     xTaskCreate(rxTask,  "uart_rx_task",  1024*2, NULL, configMAX_PRIORITIES - 1,   NULL);
     xTaskCreate(txTask,  "uart_tx_task",  1024*2, NULL, configMAX_PRIORITIES - 2, NULL);
@@ -836,7 +877,7 @@ void app_main(void) {
     xTaskCreate(displayTask, "display_task", 4096 * 2, NULL, configMAX_PRIORITIES, NULL);
 
     // Play with half step resolution to register direction change immediately
-    // Also, currently from 1 rolls back to 23
+    // Also, currently from 1 rolls back to 23... AND -- update to sweep +- 30.. maybe just make them all partial arcs that displace from the center pos
     xTaskCreate(encATask, "encA", 1024*2, (void *)&encA, configMAX_PRIORITIES - 1, NULL);
     xTaskCreate(encBTask, "encB", 1024*2, (void *)&encB, configMAX_PRIORITIES - 1, NULL);
 
@@ -845,6 +886,15 @@ void app_main(void) {
         gpio_set_level(HEARTBEAT_LED_PIN, pin);
         pin = !pin;
         vbat_assign_state();
+        if (timer0Flag) {
+            ESP_LOGI(TAG, "\n\n!! XX FART XX !!\n\n");
+            timer0Flag = false;
+        }
+
+        if (timer1Flag) {
+            ESP_LOGI(TAG, "\n\n!! XX JIZZ XX !!\n\n");
+            timer1Flag = false;
+        }
         vTaskDelay(HEARTBEAT_BLINK_PERIOD_MS / portTICK_PERIOD_MS);
     }
 }
