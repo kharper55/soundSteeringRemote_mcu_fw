@@ -60,6 +60,25 @@ enum {
     APP_ICON_RX,
 };
 
+typedef enum {
+    FULL_ARC = 0,
+    PARTIAL_ARC
+} app_arc_t;
+
+typedef enum {
+    ARC0 = 0,
+    ARC1,
+    ARC2,
+    ARC3
+} app_arc_names_t;
+
+typedef enum {
+    BAT_EMPTY = -1,
+    BAT_LOW = 0,
+    BAT_MED,
+    BAT_FULL
+} battery_states_t;
+
 uint32_t knobColors[2] = {APP_COLOR_UNH_GOLD, APP_COLOR_RED}; // SWITCH RELEASED COLOR , SWITCH PRESSED COLOR
 uint32_t textColors[2] = {APP_COLOR_BLACK, APP_COLOR_RED}; // STANDARD TEXT COLOR , HIGHLIGHTED TEXT COLOR
 uint32_t batteryColors[3] = {APP_COLOR_RED, APP_COLOR_UNH_GOLD, APP_COLOR_PCB_GREEN_ALT};

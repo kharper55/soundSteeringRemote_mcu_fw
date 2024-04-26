@@ -24,7 +24,6 @@ extern "C" {
 
 #define HEARTBEAT_BLINK_PERIOD_MS 100
 
-static void gpio_pin_init(uint32_t gpio_num, gpio_mode_t direction);
 void app_gpio_init(void);
 
 #ifdef __cplusplus
