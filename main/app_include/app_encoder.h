@@ -28,9 +28,23 @@ extern "C" {
 #define MAX_ENCODER_COUNTS        23 + 1     // 24PPR encoders. 0-23.
 #define ENC_QUEUE_DELAY           10
 
+// Define a structure to hold both encoder object and queue handle
+typedef struct {
+    char * TAG;
+    rotary_encoder_info_t * encoder;
+    rotary_encoder_event_t * event;
+    rotary_encoder_state_t * state;
+    gpio_num_t pinA;
+    gpio_num_t pinB;
+    gpio_num_t pinSW;
+    QueueHandle_t queue;
+} encParams_t;
+
 // Static functions
 
 // User functions
+void encoder_init(rotary_encoder_info_t * encoder, gpio_num_t cha_pin, gpio_num_t chb_pin, 
+                         gpio_num_t sw_pin, bool en_half_steps, bool flip_dir);
 
 #ifdef __cplusplus
 }

@@ -644,7 +644,7 @@ lv_init();
     const disp_backlight_config_t disp_bl_cfg = {
         .pwm_control = true,
         .output_invert = false,
-        .gpio_num = 21,
+        .gpio_num = TFT_BACKLIGHT_PIN,
         .timer_idx = 1,
         .channel_idx = 1,
     };
@@ -654,6 +654,7 @@ lv_init();
 
     app_display_init();
 
+    // LVGL TASK LOOP
     while (1) {
         /* Delay 1 tick (assumes FreeRTOS tick is 10ms */
         vTaskDelay(1);
@@ -685,58 +686,44 @@ lv_init();
 }
 
 /*---------------------------------------------------------------
-    Rotary Encoder initialization function
----------------------------------------------------------------*/
-static void encoder_init(rotary_encoder_info_t * encoder, gpio_num_t cha_pin, gpio_num_t chb_pin, 
-                         gpio_num_t sw_pin, bool en_half_steps, bool flip_dir) {
-
-    esp_err_t err;
-    // esp32-rotary-encoder requires that the GPIO ISR service is installed before calling rotary_encoder_register()
-    gpio_install_isr_service(0);    // This function has protection around it to ensure that it cannot be called over itself
-
-    // Initialise the rotary encoder device with the GPIOs for A and B signals
-    ESP_ERROR_CHECK(rotary_encoder_init(encoder, cha_pin, chb_pin, sw_pin));
-    ESP_ERROR_CHECK(rotary_encoder_enable_half_steps(encoder, en_half_steps));
-    if (flip_dir) {
-        ESP_ERROR_CHECK(rotary_encoder_flip_direction(encoder));
-    }
-}
-
-/*---------------------------------------------------------------
     Rotary Encoder task
 ---------------------------------------------------------------*/
-static void encATask(void * handle) {
-
-    static const char * TAG = "ENC_A";
-
+static void encATask(void * pvParameters) {
+    
     const bool VERBOSE = false;
 
-    rotary_encoder_info_t * encoder;
-    encoder = (rotary_encoder_info_t *) handle;
-    //int pos = encoder->state;
+    encParams_t * params = (encParams_t *) pvParameters;
+    char * TAG = params->TAG;
+    rotary_encoder_info_t * encoder = params->encoder;
+    rotary_encoder_event_t * event = params->event;
+    rotary_encoder_state_t * state = params->state;
+    gpio_num_t pinA = params->pinA;
+    gpio_num_t pinB = params->pinB;
+    gpio_num_t pinSW = params->pinSW;
+    QueueHandle_t queue = params->queue;
 
-    encoder_init(encoder, ENCA_CHA_PIN, ENCA_CHB_PIN, ENCA_SW_PIN, false, true);
+    encoder_init(encoder, pinA, pinB, pinSW, false, true);
 
     // Create a queue for events from the rotary encoder driver.
     // Tasks can read from this queue to receive up to date position information.
-    xEncoderAQueue = rotary_encoder_create_queue();
-    ESP_ERROR_CHECK(rotary_encoder_set_queue(encoder, xEncoderAQueue));
+    queue = rotary_encoder_create_queue();
+    ESP_ERROR_CHECK(rotary_encoder_set_queue(encoder, queue));
 
     while(1) {
 
         // Wait for incoming events on the event queue.
-        if (xQueueReceive(xEncoderAQueue, &eventA, ENC_QUEUE_DELAY / portTICK_PERIOD_MS) == pdTRUE) {
-                     posA = (int)eventA.state.position;
+        if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
+            posA = (int)event->state.position;
         }
-        else {
-            // Poll current position and direction
-            ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateA));
-            posA = (int)stateA.position;
-            if (VERBOSE) {
-                ESP_LOGI(TAG, "Poll: pos %d, dir %s, sw %d", (int)stateA.position,
-                        stateA.direction ? (stateA.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateA.sw_status);
-            }
-        }
+        //else {
+        //    // Poll current position and direction
+        //    ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateA));
+        //    posA = (int)stateA.position;
+        //    if (VERBOSE) {
+        //        ESP_LOGI(TAG, "Poll: pos %d, dir %s, sw %d", (int)stateA.position,
+        //                stateA.direction ? (stateA.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateA.sw_status);
+        //    }
+        //}
         // Reset the encoder counts
         if (MAX_ENCODER_COUNTS && (posA >= MAX_ENCODER_COUNTS || posA < 0)) {
             ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
@@ -745,8 +732,6 @@ static void encATask(void * handle) {
             ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
             posA = (int)stateA.position;
         }
-
-        //vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
 
@@ -755,48 +740,55 @@ static void encATask(void * handle) {
 /*---------------------------------------------------------------
     Rotary Encoder task
 ---------------------------------------------------------------*/
-static void encBTask(void * handle) {
-
-    static const char * TAG = "ENC_B";
-
+static void encBTask(void * pvParameters) {
+    
     const bool VERBOSE = false;
 
-    rotary_encoder_info_t * encoder;
-    encoder = (rotary_encoder_info_t *) handle;
+    encParams_t * params = (encParams_t *) pvParameters;
+    char * TAG = params->TAG;
+    rotary_encoder_info_t * encoder = params->encoder;
+    rotary_encoder_event_t * event = params->event;
+    rotary_encoder_state_t * state = params->state;
+    gpio_num_t pinA = params->pinA;
+    gpio_num_t pinB = params->pinB;
+    gpio_num_t pinSW = params->pinSW;
+    QueueHandle_t queue = params->queue;
 
-    encoder_init(encoder, ENCB_CHA_PIN, ENCB_CHB_PIN, ENCB_SW_PIN, false, true);
+    encoder_init(encoder, pinA, pinB, pinSW, false, true);
 
     // Create a queue for events from the rotary encoder driver.
     // Tasks can read from this queue to receive up to date position information.
-    xEncoderBQueue = rotary_encoder_create_queue();
-    ESP_ERROR_CHECK(rotary_encoder_set_queue(encoder, xEncoderBQueue));
+    queue = rotary_encoder_create_queue();
+    ESP_ERROR_CHECK(rotary_encoder_set_queue(encoder, queue));
+
+    // Use a temp var and reassign the global enc state entry upon mismatches only
+    // Currently not registering button presses
 
     while(1) {
 
         // Wait for incoming events on the event queue.
-        if (xQueueReceive(xEncoderBQueue, &eventB, ENC_QUEUE_DELAY / portTICK_PERIOD_MS) == pdTRUE) {
-                       posB = (int)eventB.state.position;
+        if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
+            posB = (int)event->state.position;
         }
-        else {
-            // Poll current position and direction
-            ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateB));
-            posB = (int)stateB.position;
-            if (VERBOSE) {
-                ESP_LOGI(TAG, "Poll: pos %d, dir %s, sw %d", (int)stateB.position,
-                        stateB.direction ? (stateB.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateB.sw_status);
-            }
-        }
+        //else {
+        //    // Poll current position and direction
+        //    ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateB));
+        //    posB = (int)stateB.position;
+        //    if (VERBOSE) {
+        //        ESP_LOGI(TAG, "Poll: pos %d, dir %s, sw %d", (int)stateB.position,
+        //                stateB.direction ? (stateB.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateB.sw_status);
+        //    }
+        //}
+
         // Reset the encoder counts
         if (MAX_ENCODER_COUNTS && (posB >= MAX_ENCODER_COUNTS || posB < 0)) {
             ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
         }
         
-        else if ((posB == 0) && (int)stateB.direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
+        else if ((posB == 0) && (int)state->direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
             ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
-            posB = (int)stateB.position;
+            posB = (int)state->position;
         }
-
-        //vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
 
@@ -851,8 +843,31 @@ void app_main(void) {
     }
 
     // GRRR! Im using lots of globals. I hate embedded!
-    app_toggleTimerRun(&gptimer0, &gptimer0_state);
-    app_toggleTimerRun(&gptimer1, &gptimer1_state);
+    //app_toggleTimerRun(&gptimer0, &gptimer0_state);
+    //app_toggleTimerRun(&gptimer1, &gptimer1_state);
+
+    encParams_t encAParams = {
+        .TAG = "ENC_A",
+        .encoder = &encA,
+        .event = &eventA,
+        .state = &stateA,
+        .pinA = ENCA_CHA_PIN,
+        .pinB = ENCA_CHB_PIN,
+        .pinSW = ENCA_SW_PIN,
+        .queue = xEncoderAQueue
+    };
+
+    // Create an instance of encParams_t for encoder B
+    encParams_t encBParams = {
+        .TAG = "ENC_B",
+        .encoder = &encB,
+        .event = &eventB,
+        .state = &stateB,
+        .pinA = ENCB_CHA_PIN,
+        .pinB = ENCB_CHB_PIN,
+        .pinSW = ENCB_SW_PIN,
+        .queue = xEncoderBQueue
+    };
 
     // Create FreeRTOS tasks to handle various peripherals/functions
     xTaskCreate(rxTask,  "uart_rx_task",  1024*2, NULL, configMAX_PRIORITIES - 1,   NULL);
@@ -862,8 +877,8 @@ void app_main(void) {
 
     // Play with half step resolution to register direction change immediately
     // Also, currently from 1 rolls back to 23... AND -- update to sweep +- 30.. maybe just make them all partial arcs that displace from the center pos
-    xTaskCreate(encATask, "encA", 1024*2, (void *)&encA, configMAX_PRIORITIES - 1, NULL);
-    xTaskCreate(encBTask, "encB", 1024*2, (void *)&encB, configMAX_PRIORITIES - 1, NULL);
+    xTaskCreate(encATask, "encA", 1024*2, (void *)&encAParams, configMAX_PRIORITIES - 1, NULL);
+    xTaskCreate(encBTask, "encB", 1024*2, (void *)&encBParams, configMAX_PRIORITIES - 1, NULL);
 
     bool pin = 1;
     while(1) {
