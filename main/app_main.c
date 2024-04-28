@@ -30,11 +30,7 @@
 
 /*========================== CONSTANTS, MACROS, AND VARIABLE DECLARATIONS ==========================*/
 
-#define ANIM_PERIOD_MS            7000
-#define APP_ARC_SIZE              50
-
 /* Global Vars */
-
 static battery_states_t batteryState = BAT_LOW;
 
 /* Creates a semaphore to handle concurrent call to lvgl stuff
@@ -69,6 +65,12 @@ lv_obj_t * chanSelect_label;
 bool activeImage = true;
 lv_obj_t * app_images[2];
 
+// These vars are defined in app_spi.c
+extern uint32_t knobColors[2];    // Declare as extern
+extern uint32_t textColors[2];    // Declare as extern
+extern uint32_t batteryColors[3]; // Declare as extern
+extern const char app_icons[][4]; // Declare as extern
+
 int vpotd = 0;
 int vpotd_raw = 0;
 int vpotd_cali = 0;
@@ -99,27 +101,32 @@ static void txTask(void *arg) {
 
     char * txData = (char *) malloc(TX_BUF_SIZE + 1);
 
+    const int16_t POS_OFFSET = 30;
+
     // both encoders should spit out counts between +=30
     // both pots -> might want to filter the adc counts, and then scale via bit shift (12 bit to 8 bit?)
-    static uint8_t temp_azimuthPos = 0;
-    static uint8_t temp_elevPos = 0;
-    static uint8_t temp_potc_counts = 0;
-    static uint8_t temp_potd_counts = 0;
+    static int16_t temp_azimuthPos = MIN_ENCODER_COUNTS; // -30
+    static int16_t temp_elevPos = MIN_ENCODER_COUNTS;    // -30
+    static uint8_t temp_potc_counts = PCT_MIN; // 0
+    static uint8_t temp_potd_counts = PCT_MIN; // 0
 
     // use some switch case and simple assignment to classify which code should be sent based on running system state
     
     while (1) {
         //if (xQueueReceive(sendData(TX_TASK_TAG, "Hello world") == pdTrue)) {}
 
-        if (posA != temp_azimuthPos || posB != temp_elevPos || vpotc_pct != temp_potc_counts || vpotd_pct != temp_potd_counts) {
-            sprintf(txData,"%02X%02X%02X%02X", temp_azimuthPos, temp_elevPos, temp_potc_counts, temp_potd_counts);
-            const int len = strlen(txData);
-            const int txBytes = uart_write_bytes(UART_NUM_2, txData, len);
-            ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s'", txBytes, txData);
+        if ((posA != temp_azimuthPos) || (posB != temp_elevPos) || 
+            (vpotc_pct != temp_potc_counts) || (vpotd_pct != temp_potd_counts)) {
+
             temp_azimuthPos = posA;
             temp_elevPos = posB;
             temp_potc_counts = vpotc_pct;
-            temp_potd_counts = vpotd_pct;
+            temp_potd_counts = vpotd_pct;        
+
+            sprintf(txData,"%02X%02X%02X%02X", (uint8_t)(temp_azimuthPos + POS_OFFSET), (uint8_t)(temp_elevPos + POS_OFFSET), temp_potc_counts, temp_potd_counts);
+            const int len = strlen(txData);
+            const int txBytes = uart_write_bytes(UART_NUM_2, txData, len);
+            ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s'", txBytes, txData);   
         }
 
         vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -174,6 +181,7 @@ static float adc_filter(int value, adc_filter_t * filterObject) {
     return (filterObject->sum / (float)denominator);
 }
 
+// Break this into multiple tasks and config similarly to encoders
 /*---------------------------------------------------------------
     ADC Oneshot Spurious Read Task (All 3 channels)
 ---------------------------------------------------------------*/
@@ -251,61 +259,6 @@ static void set_x(void * var, int32_t v) {
 }
 
 /*---------------------------------------------------------------
-    LCD arc objects for encoders and potentiometers.
----------------------------------------------------------------*/
-lv_obj_t * app_arc_create(lv_obj_t * comp_parent, app_arc_t arc_t, lv_coord_t r, 
-                          lv_align_t align, lv_coord_t x_offs, lv_coord_t y_offs) {
-
-    lv_obj_t * newArc;
-    const void * tempImg;
-    newArc = lv_arc_create(comp_parent);
-
-    lv_obj_set_width(newArc, r);
-    lv_obj_set_height(newArc, r);
-    lv_obj_align(newArc, align, x_offs, y_offs);
-    lv_obj_clear_flag(newArc, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_CLICK_FOCUSABLE);      /// Flags
-    if (arc_t == FULL_ARC) {
-        lv_arc_set_range(newArc, 0, 360);
-        lv_arc_set_value(newArc, 160);
-        lv_arc_set_bg_angles(newArc, 0, 360);
-    }
-    else {
-        lv_arc_set_value(newArc, 10);
-        /* Default bg_angles range is 120, 60 */
-    }
-    lv_obj_set_style_arc_width(newArc, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-
-    if (arc_t == FULL_ARC) {
-        lv_obj_set_style_bg_img_src(newArc, &tempImg, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-        lv_obj_set_style_blend_mode(newArc, LV_BLEND_MODE_NORMAL, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-        lv_obj_set_style_opa(newArc, 0, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-    }
-    else {
-        lv_obj_set_style_arc_color(newArc, lv_color_hex(APP_COLOR_UNH_NAVY_ALT), LV_PART_INDICATOR | LV_STATE_DEFAULT);
-        lv_obj_set_style_arc_opa(newArc, 255, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-    }
-    lv_obj_set_style_arc_width(newArc, 8, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-
-    lv_obj_set_style_bg_color(newArc, lv_color_hex(APP_COLOR_UNH_GOLD), LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_opa(newArc, 255, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_outline_color(newArc, lv_color_hex(0x000000), LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_outline_opa(newArc, 255, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_outline_width(newArc, 1, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_outline_pad(newArc, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_color(newArc, lv_color_hex(0x000000), LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_opa(newArc, 255, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_width(newArc, 10, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_shadow_spread(newArc, 0, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_left(newArc, 2, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_right(newArc, 2, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_top(newArc, 2, LV_PART_KNOB | LV_STATE_DEFAULT);
-    lv_obj_set_style_pad_bottom(newArc, 2, LV_PART_KNOB | LV_STATE_DEFAULT);
-
-    return newArc;
-}
-
-/*---------------------------------------------------------------
     LVGL Encoder Input Device Read Callback
 ---------------------------------------------------------------*/
 static void lv_indev_encA_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data) {
@@ -359,13 +312,8 @@ static void arc_encA_event_cb(lv_event_t * e) {
     lv_obj_t * arc = lv_event_get_target(e);
     lv_obj_t * label = lv_event_get_user_data(e);
 
-    /*if (event_code == LV_EVENT_PRESSED) {
-
-    }*/
-    //ESP_LOGI(TAG, "E: %dL: %d", event_code, (int)e->param);
-
-    lv_arc_set_value(arc, posA * 15);
-    lv_label_set_text_fmt(label, /*"%" LV_PRId32 "%%"*/"%d", lv_arc_get_value(arc)/15);
+    lv_arc_set_value(arc, posA * 2);
+    lv_label_set_text_fmt(label, /*"%" LV_PRId32 "%%"*/"%d", lv_arc_get_value(arc) / 2);
 
 }
 
@@ -380,10 +328,8 @@ static void arc_encB_event_cb(lv_event_t * e) {
     lv_obj_t * arc = lv_event_get_target(e);
     lv_obj_t * label = lv_event_get_user_data(e);
 
-    //ESP_LOGI(TAG, "E: %d", event_code);
-
-    lv_arc_set_value(arc, posB * 15);
-    lv_label_set_text_fmt(label, "%d", lv_arc_get_value(arc)/15);
+    lv_arc_set_value(arc, posB * 2);
+    lv_label_set_text_fmt(label, "%d", lv_arc_get_value(arc) / 2);
 
 }
 
@@ -494,7 +440,7 @@ void app_display_init(void) {
     lv_obj_align(obj, LV_ALIGN_CENTER, -70, -75);
 
     //------------- Enc A - Azimuth Encoder Arc ---------------//
-    arc0 = app_arc_create(lv_scr_act(), FULL_ARC, APP_ARC_SIZE, LV_ALIGN_TOP_RIGHT, -10, 10);
+    arc0 = app_arc_create(lv_scr_act(), PARTIAL_ARC, APP_ARC_SIZE, LV_ALIGN_TOP_RIGHT, -10, 10, true);
     lv_obj_t * label_arc0 = lv_label_create(lv_scr_act());
     lv_obj_t * label_data_arc0 = lv_label_create(arc0); // set parent to arc object
     lv_label_set_text(label_arc0, "Azim. Enc.");
@@ -505,7 +451,7 @@ void app_display_init(void) {
     lv_event_send(arc0, LV_EVENT_VALUE_CHANGED, 160);
 
     //------------- Enc B - Elevation Encoder Arc ---------------//
-    arc1 = app_arc_create(lv_scr_act(), FULL_ARC, APP_ARC_SIZE, LV_ALIGN_RIGHT_MID, -10, -offset);
+    arc1 = app_arc_create(lv_scr_act(), PARTIAL_ARC, APP_ARC_SIZE, LV_ALIGN_RIGHT_MID, -10, -offset, true);
     lv_obj_t * label_arc1 = lv_label_create(lv_scr_act());
     lv_obj_t * label_data_arc1 = lv_label_create(arc1);
     lv_label_set_text(label_arc1, "Elev. Enc.");
@@ -515,7 +461,7 @@ void app_display_init(void) {
     lv_event_send(arc1, LV_EVENT_VALUE_CHANGED, 160);
 
     //------------- Pot C - Volume Potentiometer Arc ---------------//
-    arc2 = app_arc_create(lv_scr_act(), PARTIAL_ARC, APP_ARC_SIZE, LV_ALIGN_RIGHT_MID, -10, +offset);
+    arc2 = app_arc_create(lv_scr_act(), PARTIAL_ARC, APP_ARC_SIZE, LV_ALIGN_RIGHT_MID, -10, +offset, false);
     lv_obj_t * label_arc2 = lv_label_create(lv_scr_act());
     lv_obj_t * label_data_arc2 = lv_label_create(arc2);
     lv_label_set_text(label_arc2, "Volm. Pot.");
@@ -526,7 +472,7 @@ void app_display_init(void) {
     lv_event_send(arc2, LV_EVENT_VALUE_CHANGED, NULL);
 
     //------------- Pot D - Volume Potentiometer Arc ---------------//
-    arc3 = app_arc_create(lv_scr_act(), PARTIAL_ARC, APP_ARC_SIZE, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    arc3 = app_arc_create(lv_scr_act(), PARTIAL_ARC, APP_ARC_SIZE, LV_ALIGN_BOTTOM_RIGHT, -10, -10, false);
     lv_obj_t * label_arc3 = lv_label_create(lv_scr_act());
     lv_obj_t * label_data_arc3 = lv_label_create(arc3);
     lv_label_set_text(label_arc3, "Dist. Pot.");
@@ -604,12 +550,12 @@ static void tickInc(void *arg) {
 ---------------------------------------------------------------*/
 static void displayTask(void *pvParameter) {
 
-static const char *DISPLAY_TASK_TAG = "DISPLAY";
+    static const char *DISPLAY_TASK_TAG = "DISPLAY";
 
-(void)pvParameter;
-xGuiSemaphore = xSemaphoreCreateMutex();
+    (void)pvParameter;
+    xGuiSemaphore = xSemaphoreCreateMutex();
 
-lv_init();
+    lv_init();
 
     const esp_timer_create_args_t periodic_timer_args = {
         .callback = &tickInc,
@@ -689,7 +635,7 @@ lv_init();
     Rotary Encoder task
 ---------------------------------------------------------------*/
 static void encATask(void * pvParameters) {
-    
+
     const bool VERBOSE = false;
 
     encParams_t * params = (encParams_t *) pvParameters;
@@ -725,8 +671,9 @@ static void encATask(void * pvParameters) {
         //    }
         //}
         // Reset the encoder counts
-        if (MAX_ENCODER_COUNTS && (posA >= MAX_ENCODER_COUNTS || posA < 0)) {
-            ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
+        if (MAX_ENCODER_COUNTS && (posA >= MAX_ENCODER_COUNTS || posA <= MIN_ENCODER_COUNTS)) {
+            //ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
+            ESP_ERROR_CHECK(rotary_encoder_hold(encoder));
         }
         else if ((posA == 0) && (int)stateA.direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
             ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
@@ -770,6 +717,8 @@ static void encBTask(void * pvParameters) {
         if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
             posB = (int)event->state.position;
         }
+
+        // NOTE: HAVING COMMENTED OUT THIS POLLING LOOP, THE PUSH BUTTONS ARE NO LONGER REGISTERED
         //else {
         //    // Poll current position and direction
         //    ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateB));
@@ -781,8 +730,9 @@ static void encBTask(void * pvParameters) {
         //}
 
         // Reset the encoder counts
-        if (MAX_ENCODER_COUNTS && (posB >= MAX_ENCODER_COUNTS || posB < 0)) {
-            ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
+        if (MAX_ENCODER_COUNTS && (posB >= MAX_ENCODER_COUNTS || posB <= MIN_ENCODER_COUNTS)) {
+            //ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
+            ESP_ERROR_CHECK(rotary_encoder_hold(encoder));
         }
         
         else if ((posB == 0) && (int)state->direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {

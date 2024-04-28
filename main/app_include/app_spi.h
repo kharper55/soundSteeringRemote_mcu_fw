@@ -20,9 +20,9 @@ extern "C" {
 #include "lvgl_helpers.h"
 #include "esp_timer.h"
 
-// Image files
-#include "app_img_universityCrest160x160.c"
-#include "app_img_directivity160x160.c"
+// Image files. These are linked in by CMake (see CMAKELists.txt src list)
+//#include "app_img_universityCrest160x160.c"
+//#include "app_img_directivity160x160.c"
 
 // Pins
 // SPI "VSPI" & TFT ILI9341 DISPLAY
@@ -35,8 +35,10 @@ extern "C" {
 #define TFT_BACKLIGHT_PIN       GPIO_NUM_21 // PWM backlight adjustable through ESP-IDF SDKCONFIG
 
 // Settings
-#define LCD_HOST                  VSPI_HOST
-#define LV_TICK_PERIOD_MS         1
+#define LCD_HOST                VSPI_HOST
+#define LV_TICK_PERIOD_MS       1
+#define ANIM_PERIOD_MS          5000
+#define APP_ARC_SIZE            50
 
 typedef enum lv_color_t {
     APP_COLOR_RED           = 0xB11C1C,
@@ -79,22 +81,16 @@ typedef enum {
     BAT_FULL
 } battery_states_t;
 
-uint32_t knobColors[2] = {APP_COLOR_UNH_GOLD, APP_COLOR_RED}; // SWITCH RELEASED COLOR , SWITCH PRESSED COLOR
-uint32_t textColors[2] = {APP_COLOR_BLACK, APP_COLOR_RED}; // STANDARD TEXT COLOR , HIGHLIGHTED TEXT COLOR
-uint32_t batteryColors[3] = {APP_COLOR_RED, APP_COLOR_UNH_GOLD, APP_COLOR_PCB_GREEN_ALT};
+// These vars are actually defined in the source corresponding to this header (ie app_spi.c)
+extern uint32_t knobColors[2];    // Declare as extern
+extern uint32_t textColors[2];    // Declare as extern
+extern uint32_t batteryColors[3]; // Declare as extern
+extern const char app_icons[][4]; // Declare as extern
 
-const char app_icons[][4] = {
-    "\xEF\x89\x83", /* LV_SYMBOL_BATTERY_1 */
-    "\xEF\x89\x82", /* LV_SYMBOL_BATTERY_2 */
-    "\xEF\x89\x80", /* LV_SYMBOL_BATTERY_FULL */
-    "\xEF\x89\x84", /* LV_SYMBOL_BATTERY_EMPTY */
-    "\xEF\x83\xA7", /* LV_SYMBOL_CHARGE */
-    "\xEF\x8a\x93", /* LV_SYMBOL_BLUETOOTH */
-    "\xEF\x82\x95", /* LV_SYMBOL_BELL */
-    "\xEF\x83\xB3"  /* LV_SYMBOL_CALL */
-};
-
-void app_display_init(void);
+//void app_display_init(void);
+lv_obj_t * app_arc_create(lv_obj_t * comp_parent, app_arc_t arc_t, lv_coord_t r, 
+                          lv_align_t align, lv_coord_t x_offs, lv_coord_t y_offs,
+                          bool symmetric_mode);
 
 
 #ifdef __cplusplus

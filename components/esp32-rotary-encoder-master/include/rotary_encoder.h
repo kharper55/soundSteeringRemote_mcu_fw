@@ -87,6 +87,8 @@ typedef struct {
     gpio_num_t pin_a;                       ///< GPIO for Signal A from the rotary encoder device
     gpio_num_t pin_b;                       ///< GPIO for Signal B from the rotary encoder device
     gpio_num_t pin_sw;                      ///< GPIO for Optional switch pin from the rotary encoder device
+    int8_t HOLD_POS_TOP;
+    int8_t HOLD_POS_BOT;
     QueueHandle_t queue;                    ///< Handle for event queue, created by ::rotary_encoder_create_queue
     const table_row_t * table;              ///< Pointer to active state transition table
     uint8_t table_state;                    ///< Internal state
@@ -109,8 +111,8 @@ typedef struct {
  * @param[in] pin_b GPIO number for rotary encoder output B.
  * @return ESP_OK if successful, ESP_FAIL or ESP_ERR_* if an error occurred.
  */
-esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gpio_num_t pin_b, gpio_num_t pin_sw);
-
+esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gpio_num_t pin_b, 
+                              gpio_num_t pin_sw, int8_t enc_max, int8_t enc_min);
 /**
  * @brief Enable half-stepping mode. This generates twice as many counted steps per rotation.
  * @param[in] info Pointer to initialised rotary encoder info structure.
@@ -168,6 +170,7 @@ esp_err_t rotary_encoder_reset(rotary_encoder_info_t * info);
 /* Custom Functions (Kharper 03/2024) */
 esp_err_t rotary_encoder_wrap(rotary_encoder_info_t * info, int max);
 esp_err_t rotary_encoder_poll_switch(rotary_encoder_info_t * info);
+esp_err_t rotary_encoder_hold(rotary_encoder_info_t * info);
 
 #ifdef __cplusplus
 }

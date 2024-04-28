@@ -103,6 +103,7 @@
 #define DIR_NONE 0x0   // No complete step yet.
 #define DIR_CW   0x10  // Clockwise step.
 #define DIR_CCW  0x20  // Anti-clockwise step.
+#define DIR_HOLD 0X30
 
 // Create the half-step state table (emits a code at 00 and 11)
 #define R_START       0x0
@@ -158,10 +159,12 @@ static uint8_t _process(rotary_encoder_info_t * info) {
         #ifdef ROTARY_ENCODER_DEBUG
                 uint8_t old_state = info->table_state;
         #endif
-                info->table_state = info->table[info->table_state & 0xf][pin_state];
 
-                // Return emit bits, i.e. the generated event.
-                event = info->table_state & 0x30;
+        info->table_state = info->table[info->table_state & 0xf][pin_state];
+
+        // Return emit bits, i.e. the generated event.
+        event = info->table_state & 0x30;
+
         #ifdef ROTARY_ENCODER_DEBUG
                 ESP_EARLY_LOGD(TAG, "BA %d%d, state 0x%02x, new state 0x%02x, event 0x%02x",
                             pin_state >> 1, pin_state & 1, old_state, info->table_state, event);
@@ -177,17 +180,24 @@ static void _isr_rotenc(void * args) {
     uint8_t event = _process(info);
     bool send_event = false;
 
+    // Factored on 04/27 to hold pos until a direction change occurs per reaching the max or min specified
+    // If you want to disable this, && the actual value of HOLD_POS_TOP/HOLD_POS_BOTTOM with the conditional check, and set 
+    // its value to zero in your user application through the rotary_encoder_init() call.
     switch (event) {
         case DIR_CW:
-            ++info->state.position;
-            info->state.direction = ROTARY_ENCODER_DIRECTION_CLOCKWISE;
-            send_event = true;
+            if (info->state.position < info->HOLD_POS_TOP) {
+                ++info->state.position;
+                info->state.direction = ROTARY_ENCODER_DIRECTION_CLOCKWISE;
+                send_event = true;
+            }  
             break;
         case DIR_CCW:
-            --info->state.position;
-            info->state.direction = ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE;
-            send_event = true;
-            break;
+            if (info->state.position > info->HOLD_POS_BOT) {
+                --info->state.position;
+                info->state.direction = ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE;
+                send_event = true;
+            }
+            break; 
         default:
             break;
     }
@@ -208,7 +218,8 @@ static void _isr_rotenc(void * args) {
     }
 }
 
-esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gpio_num_t pin_b, gpio_num_t pin_sw) {
+esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gpio_num_t pin_b, 
+                              gpio_num_t pin_sw, int8_t enc_max, int8_t enc_min) {
 
     esp_err_t err = ESP_OK;
 
@@ -216,6 +227,8 @@ esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gp
         info->pin_a = pin_a;
         info->pin_b = pin_b;
         info->pin_sw = pin_sw;
+        info->HOLD_POS_TOP = enc_max;
+        info->HOLD_POS_BOT = enc_min;
         info->table = &_ttable_full[0];   //enable_half_step ? &_ttable_half[0] : &_ttable_full[0];
         info->table_state = R_START;
         info->state.position = 0;
@@ -346,6 +359,23 @@ esp_err_t rotary_encoder_reset(rotary_encoder_info_t * info) {
 
     if (info) {
         info->state.position = 0;
+        //info->state.direction = ROTARY_ENCODER_DIRECTION_NOT_SET;
+    }
+
+    else {
+        ESP_LOGE(TAG, "info is NULL");
+        err = ESP_ERR_INVALID_ARG;
+    }
+
+    return err;
+}
+
+esp_err_t rotary_encoder_hold(rotary_encoder_info_t * info) {
+
+    esp_err_t err = ESP_OK;
+
+    if (info) {
+        info->state.position = info->state.position;
         //info->state.direction = ROTARY_ENCODER_DIRECTION_NOT_SET;
     }
 

@@ -25,8 +25,9 @@ extern "C" {
 #define ENCB_SW_PIN             GPIO_NUM_32
 
 // Settings
-#define MAX_ENCODER_COUNTS        23 + 1     // 24PPR encoders. 0-23.
-#define ENC_QUEUE_DELAY           10
+#define MAX_ENCODER_COUNTS      (int8_t)(30)          // 24PPR encoders. 0-23 WOULDA BEEN NICE but we NEEED angles here baby (excuse to utilize all BRAMs on the FPGA tehe)
+#define MIN_ENCODER_COUNTS      -MAX_ENCODER_COUNTS   // 24PPR encoders. 0-23.
+#define ENC_QUEUE_DELAY         10
 
 // Define a structure to hold both encoder object and queue handle
 typedef struct {

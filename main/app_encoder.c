@@ -11,7 +11,7 @@ void encoder_init(rotary_encoder_info_t * encoder, gpio_num_t cha_pin, gpio_num_
     gpio_install_isr_service(0);    // This function has protection around it to ensure that it cannot be called over itself
 
     // Initialise the rotary encoder device with the GPIOs for A and B signals
-    ESP_ERROR_CHECK(rotary_encoder_init(encoder, cha_pin, chb_pin, sw_pin));
+    ESP_ERROR_CHECK(rotary_encoder_init(encoder, cha_pin, chb_pin, sw_pin, MAX_ENCODER_COUNTS, MIN_ENCODER_COUNTS));
     ESP_ERROR_CHECK(rotary_encoder_enable_half_steps(encoder, en_half_steps));
     if (flip_dir) {
         ESP_ERROR_CHECK(rotary_encoder_flip_direction(encoder));
