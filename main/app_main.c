@@ -127,6 +127,7 @@ static void txTask(void *arg) {
     int16_t potd_scaled = 0;
 
     // use some switch case and simple assignment to classify which code should be sent based on running system state
+    // also append the crc, use fixed width hex in order to omit delimiters
 
     while (1) {
         //if (xQueueReceive(sendData(TX_TASK_TAG, "Hello world") == pdTrue)) {}
