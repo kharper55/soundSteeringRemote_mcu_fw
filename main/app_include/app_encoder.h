@@ -45,7 +45,7 @@ typedef struct {
 
 // User functions
 void encoder_init(rotary_encoder_info_t * encoder, gpio_num_t cha_pin, gpio_num_t chb_pin, 
-                         gpio_num_t sw_pin, bool en_half_steps, bool flip_dir);
+                  gpio_num_t sw_pin, /*bool sw_pin_int_en,*/ bool en_half_steps, bool flip_dir);
 
 #ifdef __cplusplus
 }

@@ -290,6 +290,9 @@ static void lv_indev_encB_read_cb(lv_indev_drv_t * drv, lv_indev_data_t * data) 
     const char * TAG = "ENC_RD_CB_B";
 
     static int temp = 0;
+    
+    // Me thinks we should probably use a queue here with 0 timeout,
+    // then check with the static temp value, and update accordingly.
 
     if (posB > temp) {
         data->enc_diff = posB - temp;
@@ -378,7 +381,7 @@ static void vbat_assign_state() {
     if (vbat > 3.9) {
         batteryState = BAT_FULL;  
     }
-    else if (vbat > 3.4){
+    else if (vbat > 3.4) {
         batteryState = BAT_MED;
     }
     else {
@@ -643,6 +646,7 @@ static void encATask(void * pvParameters) {
     rotary_encoder_info_t * encoder = params->encoder;
     rotary_encoder_event_t * event = params->event;
     rotary_encoder_state_t * state = params->state;
+    //rotary_encoder_state_t * sw_int_en = params->;
     gpio_num_t pinA = params->pinA;
     gpio_num_t pinB = params->pinB;
     gpio_num_t pinSW = params->pinSW;
@@ -661,6 +665,9 @@ static void encATask(void * pvParameters) {
         if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
             posA = (int)event->state.position;
         }
+        rotary_encoder_poll_switch(encoder); // This call updates the struct member for encoder sw_status. Should maybe use a queue idk
+        //ESP_LOGI(TAG, "POLL: %d", encoder->state.sw_status);
+
         //else {
         //    // Poll current position and direction
         //    ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateA));
@@ -670,15 +677,6 @@ static void encATask(void * pvParameters) {
         //                stateA.direction ? (stateA.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateA.sw_status);
         //    }
         //}
-        // Reset the encoder counts
-        if (MAX_ENCODER_COUNTS && (posA >= MAX_ENCODER_COUNTS || posA <= MIN_ENCODER_COUNTS)) {
-            //ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
-            ESP_ERROR_CHECK(rotary_encoder_hold(encoder));
-        }
-        else if ((posA == 0) && (int)stateA.direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
-            ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
-            posA = (int)stateA.position;
-        }
     }
 }
 
@@ -715,30 +713,21 @@ static void encBTask(void * pvParameters) {
 
         // Wait for incoming events on the event queue.
         if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
-            posB = (int)event->state.position;
+            posB = (int)event->state.position; // literally everything except for this line is oop approach. need to phase out globals
         }
-
-        // NOTE: HAVING COMMENTED OUT THIS POLLING LOOP, THE PUSH BUTTONS ARE NO LONGER REGISTERED
-        //else {
-        //    // Poll current position and direction
-        //    ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateB));
-        //    posB = (int)stateB.position;
-        //    if (VERBOSE) {
-        //        ESP_LOGI(TAG, "Poll: pos %d, dir %s, sw %d", (int)stateB.position,
-        //                stateB.direction ? (stateB.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateB.sw_status);
-        //    }
-        //}
+        // update gpio state
+        rotary_encoder_poll_switch(encoder);
 
         // Reset the encoder counts
-        if (MAX_ENCODER_COUNTS && (posB >= MAX_ENCODER_COUNTS || posB <= MIN_ENCODER_COUNTS)) {
-            //ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
-            ESP_ERROR_CHECK(rotary_encoder_hold(encoder));
-        }
-        
-        else if ((posB == 0) && (int)state->direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
-            ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
-            posB = (int)state->position;
-        }
+        //if (MAX_ENCODER_COUNTS && (posB >= MAX_ENCODER_COUNTS || posB <= MIN_ENCODER_COUNTS)) {
+        //    //ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
+        //    ESP_ERROR_CHECK(rotary_encoder_hold(encoder));
+        //}
+        //
+        //else if ((posB == 0) && (int)state->direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
+        //    ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
+        //    posB = (int)state->position;
+        //}
     }
 }
 

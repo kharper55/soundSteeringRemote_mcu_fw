@@ -29,6 +29,17 @@ extern "C" {
 #define RX_BUF_SIZE         (const int) 512
 #define TX_BUF_SIZE         (const int) 512
 
+typedef enum serial_cmds_t {
+    TOGGLE_ON_OFF             = 0x0,  // Hex code for togglining device on/off (i.e. power to the array)
+    CHANGE_CHANNEL            = 0x2,  // Hex code for changing only channel with one transaction
+    CHANGE_VOLUME             = 0x4,  // Hex code for changing only volume with one transaction
+    CHANGE_COORD              = 0x6,  // Hex code for changing only coordinate with one transaction
+    CHANGE_CHANNEL_AND_VOLUME = 0x8,  // Hex code for changing both channel and volume with one transaction
+    CHANGE_VOLUME_AND_COORD   = 0xA,  // Hex code for changing both volume and coordination with one transaction
+    CHANGE_ALL                = 0xC,  // Hex code for changing volume, channel, and coordination with one transaction
+    REQUEST_INFO              = 0xE   // Hex code for requesting readback from the device
+};
+
 void uart2_init(int baud);
 
 #ifdef __cplusplus

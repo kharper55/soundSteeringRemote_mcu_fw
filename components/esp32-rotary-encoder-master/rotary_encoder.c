@@ -103,7 +103,6 @@
 #define DIR_NONE 0x0   // No complete step yet.
 #define DIR_CW   0x10  // Clockwise step.
 #define DIR_CCW  0x20  // Anti-clockwise step.
-#define DIR_HOLD 0X30
 
 // Create the half-step state table (emits a code at 00 and 11)
 #define R_START       0x0
@@ -146,6 +145,18 @@ typedef enum {
     LV_INDEV_STATE_RELEASED = 0,
     LV_INDEV_STATE_PRESSED
 } lv_indev_state_t;
+
+//volatile bool sw_interrupt_flag;
+//static void _sw_isr_handler(rotary_encoder_info_t * info) {
+    //uint32_t gpio_num = (uint32_t) arg;
+    //bool gpio_level = gpio_get_level(info->pin_sw);
+//    sw_interrupt_flag = gpio_level;
+//    //if (gpio_level == 0) {
+//    //    ESP_LOGI(TAG, "Falling edge detected on GPIO %d", gpio_num);
+//    //} else {
+//    //    ESP_LOGI(TAG, "Rising edge detected on GPIO %d", gpio_num);
+//    //}
+//}
 
 static uint8_t _process(rotary_encoder_info_t * info) {
 
@@ -219,7 +230,7 @@ static void _isr_rotenc(void * args) {
 }
 
 esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gpio_num_t pin_b, 
-                              gpio_num_t pin_sw, int8_t enc_max, int8_t enc_min) {
+                              gpio_num_t pin_sw, /*bool pin_sw_int_en,*/ int8_t enc_max, int8_t enc_min) {
 
     esp_err_t err = ESP_OK;
 
@@ -227,6 +238,7 @@ esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gp
         info->pin_a = pin_a;
         info->pin_b = pin_b;
         info->pin_sw = pin_sw;
+        //info->pin_sw_int_en = pin_sw_int_en;
         info->HOLD_POS_TOP = enc_max;
         info->HOLD_POS_BOT = enc_min;
         info->table = &_ttable_full[0];   //enable_half_step ? &_ttable_half[0] : &_ttable_full[0];
@@ -245,10 +257,16 @@ esp_err_t rotary_encoder_init(rotary_encoder_info_t * info, gpio_num_t pin_a, gp
         gpio_set_direction(info->pin_b, GPIO_MODE_INPUT);
         gpio_set_intr_type(info->pin_b, GPIO_INTR_ANYEDGE);
 
-        gpio_reset_pin(info->pin_sw);
-        gpio_set_pull_mode(info->pin_sw, GPIO_FLOATING);
-        gpio_set_direction(info->pin_sw, GPIO_MODE_INPUT);
-
+        //if (info->pin_sw) {
+            gpio_reset_pin(info->pin_sw);
+            gpio_set_pull_mode(info->pin_sw, GPIO_FLOATING);
+            gpio_set_direction(info->pin_sw, GPIO_MODE_INPUT);
+            //if(info->pin_sw_int_en) {
+            //    gpio_set_intr_type(info->pin_sw, GPIO_INTR_ANYEDGE);
+            //    gpio_isr_handler_add(info->pin_sw, _sw_isr_handler, info);
+            //}
+        //}
+        
         // install interrupt handlers
         gpio_isr_handler_add(info->pin_a, _isr_rotenc, info);
         gpio_isr_handler_add(info->pin_b, _isr_rotenc, info);
@@ -411,7 +429,6 @@ esp_err_t rotary_encoder_wrap(rotary_encoder_info_t * info, int max) {
 esp_err_t rotary_encoder_poll_switch(rotary_encoder_info_t * info) {
 
     esp_err_t err = ESP_OK;
-    static bool pin_state = false;
 
     if (info) {
         if (info->pin_sw) {
