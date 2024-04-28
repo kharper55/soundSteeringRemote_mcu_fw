@@ -76,7 +76,7 @@ static const char * ADC_TAG = "ADC";
         .bitwidth = ADC_BITWIDTH_DEFAULT,
         .atten = ADC_APP_ATTEN,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(*adc_handle, channel, &adc_config));
+    adc_oneshot_config_channel(*adc_handle, channel, &adc_config);
 
 }
 

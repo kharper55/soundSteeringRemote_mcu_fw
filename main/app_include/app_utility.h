@@ -25,6 +25,8 @@ extern "C" {
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 
+#include "rom/crc.h"
+
 // Static functions
 
 // User functions

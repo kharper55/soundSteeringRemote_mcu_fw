@@ -38,7 +38,7 @@ extern "C" {
 #define ADC_MAX                   1100
 #define ADC_MIN                   100
 #define SCALE_VPOT(X)             (int)((((X - ADC_MIN) * (PCT_MAX - PCT_MIN))/(float)(ADC_MAX - ADC_MIN)) + PCT_MIN)
-#define SCALE_VPOT_INVERT(X)      (int)(PCT_MAX - (((X - ADC_MIN) * (PCT_MAX - PCT_MIN))/(float)(ADC_MAX - ADC_MIN)));
+#define SCALE_VPOT_INVERT(X)      (int)(PCT_MAX - (((X - ADC_MIN) * (PCT_MAX - PCT_MIN))/(float)(ADC_MAX - ADC_MIN)))
 
 typedef struct {
     int count;
@@ -48,6 +48,41 @@ typedef struct {
     bool bufferFullFlag;
 } adc_filter_t;
 //try out adjustable length for the above so smaller buffers have no need to pass so much info 
+
+typedef struct {
+    char * TAG;
+    adc_oneshot_unit_handle_t * handle;
+    adc_cali_handle_t * cali_handle;
+    adc_unit_t unit;
+    adc_channel_t channel;
+    adc_atten_t atten;
+    adc_filter_t * filt;
+    int delay_ms;
+    int * vraw;
+    int * vcal;
+    int * vfilt;
+} adcOneshotParams_t;
+
+//info
+/*
+adc_oneshot_unit_handle_t adc1_handle = NULL;
+    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
+    adc_cali_handle_t adc1_cali_chan1_handle = NULL;
+
+    adc_oneshot_unit_handle_t adc2_handle = NULL;
+    adc_cali_handle_t adc2_cali_handle = NULL;
+
+    adc_oneshot_init(&adc1_handle, ADC_UNIT_1, ADC1_CHAN0); // VPOTD adc10
+    adc_calibration_init(ADC_UNIT_1, ADC1_CHAN0, ADC_APP_ATTEN, &adc1_cali_chan0_handle);
+
+    adc_oneshot_init(&adc2_handle, ADC_UNIT_2, ADC2_CHAN0); // VBAT adc28 or adc17
+    adc_calibration_init(ADC_UNIT_2, ADC2_CHAN0, ADC_APP_ATTEN, &adc2_cali_handle);
+
+    adc_oneshot_init(&adc1_handle, ADC_UNIT_1, ADC1_CHAN1); // VPOTC adc16
+    adc_calibration_init(ADC_UNIT_1, ADC1_CHAN1, ADC_APP_ATTEN, &adc1_cali_chan1_handle);
+
+*/
+
 
 /*static*/ bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, 
                                  adc_atten_t atten, adc_cali_handle_t *out_handle);

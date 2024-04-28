@@ -16,6 +16,13 @@ const char app_icons[][4] = {
     "\xEF\x83\xB3"  /* LV_SYMBOL_CALL */
 };
 
+const char * batteryStateNames[4] = {
+    "BATT_EMPTY",
+    "BATT_LOW",
+    "BATT_MED",
+    "BATT_FULL"
+};
+
 /*---------------------------------------------------------------
     LCD arc objects for encoders and potentiometers.
 ---------------------------------------------------------------*/

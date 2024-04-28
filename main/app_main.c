@@ -49,40 +49,43 @@ rotary_encoder_event_t eventA = { 0 };
 rotary_encoder_event_t eventB = { 0 };
 rotary_encoder_state_t stateA = { 0 };
 rotary_encoder_state_t stateB = { 0 };
-int posA = 0;
-int posB = 0;
-int posC = 0;
-int posD = 0;
 
 lv_obj_t * vbatLabel;
 static lv_style_t vbatLabel_style;
-int vbat_raw = 0;
-int vbat_cali = 0;
-float vbat = 0;
-
 lv_obj_t * chanSelect_label;
-
-bool activeImage = true;
 lv_obj_t * app_images[2];
+bool activeImage = true;
 
 // These vars are defined in app_spi.c
+extern const char * batteryStateNames[4];
 extern uint32_t knobColors[2];    // Declare as extern
 extern uint32_t textColors[2];    // Declare as extern
 extern uint32_t batteryColors[3]; // Declare as extern
 extern const char app_icons[][4]; // Declare as extern
 
-int vpotd = 0;
+int posA = 0; // Azimuth angle, -30 -> 30
+int posB = 0; // Elevation angle, -30 -> 30
+int posC = 0; // Scaled percentage of potC
+int posD = 0; // Scaled percentage of potD
+
+float vbat = 0;
+int vbat_raw = 0;
+int vbat_cali = 0;
+int vbat_filt = 0;
+
 int vpotd_raw = 0;
 int vpotd_cali = 0;
 int vpotd_pct = 0;
-int vpotc = 0;
+int vpotd_filt = 0;
+
 int vpotc_raw = 0;
 int vpotc_cali = 0;
 int vpotc_pct = 0;
+int vpotc_filt = 0;
 
-adc_filter_t vbat_filt = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false};
-adc_filter_t vpotd_filt = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false};
-adc_filter_t vpotc_filt = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false}; // Try automatically getting length with sizeof(arr)/sizeof(firstEl)(this requires predeclaring an array and passing to the struct which I am not sure is possible)
+adc_filter_t vbat_filt_handle = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false};
+adc_filter_t vpotd_filt_handle = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false};
+adc_filter_t vpotc_filt_handle = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, false}; // Try automatically getting length with sizeof(arr)/sizeof(firstEl)(this requires predeclaring an array and passing to the struct which I am not sure is possible)
 
 disp_backlight_h bl;
 
@@ -90,6 +93,13 @@ volatile bool timer0Flag = false;
 volatile bool timer1Flag = false;
 
 /*================================ FUNCTION AND TASK DEFINITIONS ===================================*/
+
+/*---------------------------------------------------------------
+    Basic CRC32 Implementation (Little Endian)
+---------------------------------------------------------------*/
+uint32_t app_compute_crc32(char * str, int data_len) {
+    return crc32_le(0, (const uint8_t *)str, strlen(str));
+}
 
 /*---------------------------------------------------------------
     UART2 TX FreeRTOS task
@@ -100,33 +110,43 @@ static void txTask(void *arg) {
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
     char * txData = (char *) malloc(TX_BUF_SIZE + 1);
+    char * crcBuff = (char *) malloc(sizeof(uint32_t) + 1);
 
     const int16_t POS_OFFSET = 30;
+    const char DELIM = '/';
 
     // both encoders should spit out counts between +=30
     // both pots -> might want to filter the adc counts, and then scale via bit shift (12 bit to 8 bit?)
     static int16_t temp_azimuthPos = MIN_ENCODER_COUNTS; // -30
     static int16_t temp_elevPos = MIN_ENCODER_COUNTS;    // -30
-    static uint8_t temp_potc_counts = PCT_MIN; // 0
-    static uint8_t temp_potd_counts = PCT_MIN; // 0
+    //static uint8_t temp_potc_counts = PCT_MIN; // 0
+    //static uint8_t temp_potd_counts = PCT_MIN; // 0
+    static int16_t temp_potc_counts = 0; // 0
+    static int16_t temp_potd_counts = 0; // 0
+    int16_t potc_scaled = 0;
+    int16_t potd_scaled = 0;
 
     // use some switch case and simple assignment to classify which code should be sent based on running system state
-    
+
     while (1) {
         //if (xQueueReceive(sendData(TX_TASK_TAG, "Hello world") == pdTrue)) {}
+        //(int16_t)SCALE_VPOT_INVERT(vpotd_filt)
+        potc_scaled = SCALE_VPOT_INVERT((vpotc_filt));
+        potd_scaled = SCALE_VPOT_INVERT((vpotd_filt));
 
         if ((posA != temp_azimuthPos) || (posB != temp_elevPos) || 
-            (vpotc_pct != temp_potc_counts) || (vpotd_pct != temp_potd_counts)) {
+            (potc_scaled != temp_potc_counts) || (potd_scaled != temp_potd_counts)) {
 
             temp_azimuthPos = posA;
             temp_elevPos = posB;
-            temp_potc_counts = vpotc_pct;
-            temp_potd_counts = vpotd_pct;        
+            temp_potc_counts = potc_scaled;
+            temp_potd_counts = potd_scaled;        
 
             sprintf(txData,"%02X%02X%02X%02X", (uint8_t)(temp_azimuthPos + POS_OFFSET), (uint8_t)(temp_elevPos + POS_OFFSET), temp_potc_counts, temp_potd_counts);
             const int len = strlen(txData);
+            uint32_t crc = app_compute_crc32(txData, len);
             const int txBytes = uart_write_bytes(UART_NUM_2, txData, len);
-            ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s'", txBytes, txData);   
+            ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s/%lu'", txBytes, txData, crc);   
         }
 
         vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -181,74 +201,70 @@ static float adc_filter(int value, adc_filter_t * filterObject) {
     return (filterObject->sum / (float)denominator);
 }
 
-// Break this into multiple tasks and config similarly to encoders
 /*---------------------------------------------------------------
-    ADC Oneshot Spurious Read Task (All 3 channels)
+    ADC Oneshot-Mode Continuous Read Task
+    
+    Generic oneshot adc task for various MCU adc channels
 ---------------------------------------------------------------*/
-static void adcTask(void) {
-
-    const static char * VBAT_TAG = "VBAT";
-    const static char * POTC_TAG = "POTC";
-    const static char * POTD_TAG = "POTD";
+static void adcTask(void * pvParameters) {
 
     const bool VERBOSE_FLAG = false;
+    esp_err_t err = ESP_OK;
 
-    adc_oneshot_unit_handle_t adc1_handle = NULL;
-    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
-    adc_cali_handle_t adc1_cali_chan1_handle = NULL;
-
-    adc_oneshot_unit_handle_t adc2_handle = NULL;
-    adc_cali_handle_t adc2_cali_handle = NULL;
-
-    adc_oneshot_init(&adc1_handle, ADC_UNIT_1, ADC1_CHAN0); // VPOTD adc10
-    adc_calibration_init(ADC_UNIT_1, ADC1_CHAN0, ADC_APP_ATTEN, &adc1_cali_chan0_handle);
-
-    adc_oneshot_init(&adc2_handle, ADC_UNIT_2, ADC2_CHAN0); // VBAT adc28 or adc17
-    adc_calibration_init(ADC_UNIT_2, ADC2_CHAN0, ADC_APP_ATTEN, &adc2_cali_handle);
-
-    adc_oneshot_init(&adc1_handle, ADC_UNIT_1, ADC1_CHAN1); // VPOTC adc16
-    adc_calibration_init(ADC_UNIT_1, ADC1_CHAN1, ADC_APP_ATTEN, &adc1_cali_chan1_handle);
+    adcOneshotParams_t * params = (adcOneshotParams_t *) pvParameters;
+    const char * TAG = params->TAG;
+    adc_oneshot_unit_handle_t * adc_handle = params->handle;
+    adc_cali_handle_t * cali_handle = params->cali_handle;
+    adc_unit_t unit = params->unit;
+    adc_channel_t chan = params->channel;
+    adc_atten_t atten = params->atten;
+    int delay_ms = params->delay_ms;
+    adc_filter_t * filt = params->filt;
+    int * vraw = params->vraw;
+    int * vcal = params->vcal;
+    int * vfilt = params->vfilt;
+    //int * vpct = params->vpct;    // HADNLED elsewhee=re, as pct calculation is not needed for vbat
+    
+    adc_oneshot_init(adc_handle, unit, chan); // VPOTC adc16
+    adc_calibration_init(unit, chan, atten, cali_handle);
 
     while (1) {
-        
-        ESP_ERROR_CHECK(adc_oneshot_read(adc2_handle, ADC2_CHAN0, &vbat_raw));
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc2_cali_handle, vbat_raw, &vbat_cali));
-        vbat = SCALE_VBAT(adc_filter(vbat_cali, &vbat_filt));
-        if (VERBOSE_FLAG) {
-            ESP_LOGI(VBAT_TAG, "ADC%d_%d filt: %fV", ADC_UNIT_2 + 1, ADC2_CHAN0, SCALE_VBAT(vbat));
-        }
 
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHAN0, &vpotd_raw));
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, vpotd_raw, &vpotd_cali));
-        vpotd = adc_filter(vpotd_cali, &vpotd_filt);
-        vpotd_pct = SCALE_VPOT_INVERT(vpotd);
-        // Issue!!! static vars in similar function call lead to problems...
-        // factor out that buffer full flag and keep track? or ahve on per chann1
-        if (VERBOSE_FLAG) {
-            ESP_LOGI(POTD_TAG, "ADC%d_%d filt: %dmV", ADC_UNIT_1 + 1, ADC1_CHAN0, vpotd);
-            ESP_LOGI(POTD_TAG, "ADC%d_%d pct: %d%%", ADC_UNIT_1 + 1, ADC1_CHAN0, vpotd_pct);
-        }
-
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC1_CHAN1, &vpotc_raw));
-        ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan1_handle, vpotc_raw, &vpotc_cali));
-        vpotc = adc_filter(vpotc_cali, &vpotc_filt);
-        vpotc_pct = SCALE_VPOT_INVERT(vpotc);
-        if (VERBOSE_FLAG) {
-            ESP_LOGI(POTC_TAG, "ADC%d_%d filt: %dmV", ADC_UNIT_1 + 1, ADC1_CHAN1, vpotc);
-            ESP_LOGI(POTC_TAG, "ADC%d_%d filt: %d%%", ADC_UNIT_1 + 1, ADC1_CHAN1, vpotc_pct);
-        }
+        // add members to hold/globalize the various readings, ie raw,cali,filt
         
-        vTaskDelay(pdMS_TO_TICKS(10));
+        err = adc_oneshot_read(*adc_handle, chan, vraw);
+        if (err != ESP_OK) {
+            if(VERBOSE_FLAG) {
+                // Handle timeout or other errors
+                if (err == ESP_ERR_TIMEOUT) {
+                    // Timeout occurred, handle it
+                    ESP_LOGW(TAG, "ADC read timeout occurred");
+                } else {
+                    // Handle other errors
+                    ESP_LOGE(TAG, "ADC read failed with error code: %d", err);
+                }
+            }
+        } 
+        else {
+            err = adc_cali_raw_to_voltage(*cali_handle, *vraw, vcal);
+            if (err == ESP_OK) {
+
+                *vfilt = adc_filter(*vcal, filt);
+            
+                if (VERBOSE_FLAG) {
+                    ESP_LOGI(TAG, "ADC%d_%d raw  : %d counts", unit + 1, chan, *vraw);
+                    ESP_LOGI(TAG, "ADC%d_%d cal  : %dmV", unit + 1, chan, *vcal);
+                    ESP_LOGI(TAG, "ADC%d_%d filt : %dmV", unit + 1, chan, *vfilt);
+                    //ESP_LOGI(TAG, "ADC%d_%d pct  : %d%%", unit + 1, chan, *vpct);
+                }
+
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
     }
     
-    //Tear Down
-    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc1_handle));
-    ESP_ERROR_CHECK(adc_oneshot_del_unit(adc2_handle));
-
-    adc_calibration_deinit(adc1_cali_chan0_handle);
-    adc_calibration_deinit(adc1_cali_chan1_handle);
-    adc_calibration_deinit(adc2_cali_handle);
-
+    adc_oneshot_del_unit(*adc_handle);
+    adc_calibration_deinit(*cali_handle);
 }
 
 /*---------------------------------------------------------------
@@ -349,7 +365,7 @@ static void arc_potC_event_cb(lv_event_t * e) {
 
     //ESP_LOGI(TAG, "E: %d", event_code);
 
-    lv_arc_set_value(arc, (int16_t)vpotc_pct);
+    lv_arc_set_value(arc, (int16_t)SCALE_VPOT_INVERT(vpotc_filt));
     lv_label_set_text_fmt(label, "%d", lv_arc_get_value(arc));
 
 }
@@ -367,7 +383,7 @@ static void arc_potD_event_cb(lv_event_t * e) {
 
     //ESP_LOGI(TAG, "E: %d", event_code);
 
-    lv_arc_set_value(arc, (int16_t)vpotd_pct);
+    lv_arc_set_value(arc, (int16_t)SCALE_VPOT_INVERT(vpotd_filt));
     lv_label_set_text_fmt(label, "%d", lv_arc_get_value(arc));
 
 }
@@ -375,19 +391,24 @@ static void arc_potD_event_cb(lv_event_t * e) {
 /*---------------------------------------------------------------
     Vbat event for updating battery voltage readout and text color
 ---------------------------------------------------------------*/
-static void vbat_assign_state() {
+static void vbat_assign_state(battery_states_t * state, float value) {
+
+    // ADD some temp vars here to determine when charging, and display info to screen
+    // Also to gate any flickering of the vbat
+    //battery_states_t * batteryState = BAT_EMPTY;
+
+    // also drive the low batt led pin high on low battery conditions
 
     // vbat is heavily filtered in hardware and software prior to passing to the below logic blocks
-    if (vbat > 3.9) {
-        batteryState = BAT_FULL;  
+    if (value > 3.9) {
+        *state = BAT_FULL;  
     }
-    else if (vbat > 3.4) {
-        batteryState = BAT_MED;
+    else if (value > 3.4) {
+        *state = BAT_MED;
     }
     else {
-        batteryState = BAT_LOW;
+        *state = BAT_LOW;
     }
-
 }
 
 /*---------------------------------------------------------------
@@ -401,7 +422,7 @@ static void value_changed_event_vbat(lv_event_t * e) {
     lv_obj_t * label = lv_event_get_user_data(e);
 
     lv_style_set_text_color(&vbatLabel_style, lv_color_hex(batteryColors[batteryState]));
-    lv_label_set_text_fmt(vbatLabel, "%s %3.2fV", app_icons[batteryState], vbat);
+    lv_label_set_text_fmt(vbatLabel, "%s %3.2fV", app_icons[batteryState], SCALE_VBAT(vbat_filt));
 
 }
 
@@ -489,7 +510,7 @@ void app_display_init(void) {
     vbatLabel = lv_label_create(lv_scr_act());
     lv_style_init(&vbatLabel_style);
     lv_style_set_text_color(&vbatLabel_style, lv_color_hex(batteryColors[batteryState]));
-    lv_label_set_text_fmt(vbatLabel, LV_SYMBOL_BATTERY_EMPTY" %3.2fV", SCALE_VBAT(vbat));
+    lv_label_set_text_fmt(vbatLabel, LV_SYMBOL_BATTERY_EMPTY" %3.2fV", SCALE_VBAT(vbat_filt));
     lv_obj_add_style(vbatLabel, &vbatLabel_style, 0);
     lv_obj_align(vbatLabel, LV_ALIGN_TOP_LEFT, 25, 5);
     lv_obj_add_event_cb(vbatLabel, value_changed_event_vbat, LV_EVENT_VALUE_CHANGED, NULL);
@@ -610,7 +631,7 @@ static void displayTask(void *pvParameter) {
         //pdTICKS_TO_MS
         /*vTaskDelay(pdMS_TO_TICKS(10));*/
         lv_event_send(vbatLabel, LV_EVENT_VALUE_CHANGED, NULL);
-        disp_backlight_set(bl, vpotd_pct);
+        disp_backlight_set(bl, SCALE_VPOT_INVERT(vpotd_filt));
         lv_event_send(arc2, LV_EVENT_VALUE_CHANGED, NULL);
         lv_event_send(arc3, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_set_style_bg_color(arc0, lv_color_hex(knobColors[stateA.sw_status]), LV_PART_KNOB);
@@ -753,7 +774,7 @@ void app_main(void) {
     static const char * TAG = "APP_MAIN";
     esp_err_t ret = ESP_OK;
 
-    // Init UART2 for development port (to be replaced with BT)
+    // Init UART2 for development port (to be replaced with/accompanied by BT)
     uart2_init(U2_BAUD);
     app_gpio_init();
     gpio_set_level(LOWBATT_LED_PIN, 1);
@@ -808,10 +829,62 @@ void app_main(void) {
         .queue = xEncoderBQueue
     };
 
+    adc_oneshot_unit_handle_t adc1_handle = NULL;
+    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
+    adc_cali_handle_t adc1_cali_chan1_handle = NULL;
+
+    adc_oneshot_unit_handle_t adc2_handle = NULL;
+    adc_cali_handle_t adc2_cali_handle = NULL;
+
+    adcOneshotParams_t vbatParams = {
+        .TAG = "VBAT",
+        .handle = &adc2_handle,
+        .cali_handle = &adc2_cali_handle,
+        .unit = ADC_UNIT_2,
+        .channel = ADC2_CHAN0,
+        .atten = ADC_APP_ATTEN,
+        .delay_ms = 1000,
+        .filt = &vbat_filt_handle,
+        .vraw = &vbat_raw,
+        .vcal = &vbat_cali,
+        .vfilt = &vbat_filt,
+    };
+
+    adcOneshotParams_t vpotcParams = {
+        .TAG = "VPOTC",
+        .handle = &adc1_handle,
+        .cali_handle = &adc1_cali_chan0_handle,
+        .unit = ADC_UNIT_1,
+        .channel = ADC1_CHAN1,
+        .atten = ADC_APP_ATTEN,
+        .delay_ms = 10,
+        .filt = &vpotc_filt_handle,
+        .vraw = &vpotc_raw,
+        .vcal = &vpotc_cali,
+        .vfilt = &vpotc_filt,
+    };
+
+    adcOneshotParams_t vpotdParams = {
+        .TAG = "VPOTD",
+        .handle = &adc1_handle,
+        .cali_handle = &adc1_cali_chan1_handle,
+        .unit = ADC_UNIT_1,
+        .channel = ADC1_CHAN0,
+        .atten = ADC_APP_ATTEN,
+        .delay_ms = 10,
+        .filt = &vpotd_filt_handle,
+        .vraw = &vpotd_raw,
+        .vcal = &vpotd_cali,
+        .vfilt = &vpotd_filt,
+    };
+
     // Create FreeRTOS tasks to handle various peripherals/functions
     xTaskCreate(rxTask,  "uart_rx_task",  1024*2, NULL, configMAX_PRIORITIES - 1,   NULL);
     xTaskCreate(txTask,  "uart_tx_task",  1024*2, NULL, configMAX_PRIORITIES - 2, NULL);
-    xTaskCreate(adcTask, "adc_task", 1024*2,   NULL, configMAX_PRIORITIES - 2,  NULL);
+    xTaskCreate(adcTask, "vpotd_task", 1024*2, (void *)&vpotdParams, configMAX_PRIORITIES - 2,  NULL);
+    xTaskCreate(adcTask, "vpotc_task", 1024*2, (void *)&vpotcParams, configMAX_PRIORITIES - 2,  NULL);
+    xTaskCreate(adcTask, "vbat_task", 1024*2, (void *)&vbatParams, configMAX_PRIORITIES - 2,  NULL);
+    
     xTaskCreate(displayTask, "display_task", 4096 * 2, NULL, configMAX_PRIORITIES, NULL);
 
     // Play with half step resolution to register direction change immediately
@@ -823,7 +896,8 @@ void app_main(void) {
     while(1) {
         gpio_set_level(HEARTBEAT_LED_PIN, pin);
         pin = !pin;
-        vbat_assign_state();
+        vbat_assign_state(&batteryState, SCALE_VBAT(vbat_filt));
+        //ESP_LOGI(TAG, "STATE: %s", batteryStateNames[batteryState]);
         if (timer0Flag) {
             ESP_LOGI(TAG, "\n\n!! XX FART XX !!\n\n");
             timer0Flag = false;

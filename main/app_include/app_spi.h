@@ -82,6 +82,7 @@ typedef enum {
 } battery_states_t;
 
 // These vars are actually defined in the source corresponding to this header (ie app_spi.c)
+extern const char * batteryStateNames[4];// Declare as extern
 extern uint32_t knobColors[2];    // Declare as extern
 extern uint32_t textColors[2];    // Declare as extern
 extern uint32_t batteryColors[3]; // Declare as extern
