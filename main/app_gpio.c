@@ -9,8 +9,6 @@ const char * gpio_status_names[2] = {
 
 int keypress_combos[NUM_COMBOS][KEYPRESS_COMBO_LENGTH] = {
     {0, 0, 0},
-    //{1, 0, 0},
-    //{0, 1, 1}
     {0, 0, 1},
     {0, 1, 0},
     {0, 1, 1},
@@ -22,8 +20,6 @@ int keypress_combos[NUM_COMBOS][KEYPRESS_COMBO_LENGTH] = {
 
 const char * keypress_combo_names[NUM_COMBOS] = {
     "AAA",
-    //"BAA",
-    //"ABB"
     "AAB"
     "ABA"
     "ABB"
@@ -53,6 +49,9 @@ void app_gpio_init(void) {
 
 }
 
+/*---------------------------------------------------------------
+    Circular buffer stuff for registering more key combinations
+---------------------------------------------------------------*/
 // Initialize the circular buffer
 void init_buffer(circularBuffer *cb) {
     for (int i = 0; i < KEYPRESS_COMBO_LENGTH; i++) {
@@ -64,6 +63,22 @@ void init_buffer(circularBuffer *cb) {
     cb->size = KEYPRESS_COMBO_LENGTH;
 }
 
+/*---------------------------------------------------------------
+    Circular buffer stuff for registering more key combinations
+---------------------------------------------------------------*/
+void clear_buffer(circularBuffer *cb) {
+    xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
+    for (int i = 0; i < KEYPRESS_COMBO_LENGTH; i++) {
+        cb->buffer[i] = 0;
+    }
+    cb->head = 0;
+    cb->tail = 0;
+    xSemaphoreGive(cb->mutex);  // Release mutex after accessing buffer
+}
+
+/*---------------------------------------------------------------
+    Circular buffer stuff for registering more key combinations
+---------------------------------------------------------------*/
 // Push a key into the circular buffer
 void push_key(circularBuffer *cb, int key) {
     xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
@@ -75,6 +90,9 @@ void push_key(circularBuffer *cb, int key) {
     xSemaphoreGive(cb->mutex);  // Release mutex after accessing buffer
 }
 
+/*---------------------------------------------------------------
+    Circular buffer stuff for registering more key combinations
+---------------------------------------------------------------*/
 // Pop a key from the circular buffer
 int pop_key(circularBuffer *cb) {
     xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
@@ -88,12 +106,18 @@ int pop_key(circularBuffer *cb) {
     return key;
 }
 
+/*---------------------------------------------------------------
+    Circular buffer stuff for registering more key combinations
+---------------------------------------------------------------*/
 bool check_combo(circularBuffer *cb, int *target) {
+
+    static const bool VERBOSE = false;
+
     xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
     int target_index = 0;
     int buffer_index = cb->head;
     for (int i = 0; i < cb->size; i++) {
-        ESP_LOGI(GPIO_TAG, "Buffer[%d]: %d, Target[%d]: %d", buffer_index, cb->buffer[buffer_index], target_index, target[target_index]);
+        if (VERBOSE) ESP_LOGI(GPIO_TAG, "Buffer[%d]: %d, Target[%d]: %d", buffer_index, cb->buffer[buffer_index], target_index, target[target_index]);
         if (cb->buffer[buffer_index] == target[target_index]) {
             target_index++;
             if (target_index == cb->size) {

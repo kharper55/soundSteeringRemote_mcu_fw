@@ -97,6 +97,9 @@ volatile bool timerBFlag = false;
 volatile bool change_channel_flag = false;
 volatile bool toggle_on_off_flag = false;
 
+SemaphoreHandle_t xChannelFlagSemaphore;
+SemaphoreHandle_t xToggleOnOffFlagSemaphore;
+
 
 /*================================ FUNCTION AND TASK DEFINITIONS ===================================*/
 
@@ -177,9 +180,17 @@ static void txTask(void *arg) {
             switch(flag) {
                 case TOGGLE_ON_OFF:           // flag = 0x0. requires action from artix7, or alternatively just send pwm_buff_en and load_switch_en low on the controller.
                     sprintf(txData, "%01X", flag);
+                    
+                    //xSemaphoreTake(xToggleOnOffFlagSemaphore, 10);
+                    toggle_on_off_flag = false; // reset the flag, else everyones unhappy (trust me)
+                    //xSemaphoreGive(xToggleOnOffFlagSemaphore);
                     break;
                 case CHANGE_CHANNEL:          // flag = 0x2. requires action from artix7
                     sprintf(txData, "%01X", flag);
+                    //xSemaphoreTake(xChannelFlagSemaphore, 10);
+                    change_channel_flag = false;
+                    //xSemaphoreGive(xChannelFlagSemaphore);
+                    
                     break;
                 case CHANGE_COORD:            // flag = 0x4. requires action from artix7
                     sprintf(txData, "%01X%02X%02X", flag, (uint8_t)(temp_azimuthPos + POS_OFFSET), (uint8_t)(temp_elevPos + POS_OFFSET));
@@ -221,17 +232,23 @@ static void txTask(void *arg) {
 ---------------------------------------------------------------*/
 static void rxTask(void *arg) {
 
+    static const bool (VERBOSE_FLAG) = true;
+
     static const char * RX_TASK_TAG = "RX_TASK";
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE + 1);
 
     // With the opposite end of the twisted pair harness floaitng, when txing, ew get erroneous reads
+    
+    // Pertinent flag here will be to rerequest info from the controller
+
+    // if bad_data_flag then send CMD, wait for response
 
     while (1) {
         const int rxBytes = uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, 10 / portTICK_PERIOD_MS);
         if (rxBytes > 0) {
             data[rxBytes] = 0;
-            ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", rxBytes, data);
+            if (VERBOSE_FLAG) ESP_LOGI(RX_TASK_TAG, "Read %d bytes: '%s'", rxBytes, data);
         }
     }
 
@@ -708,7 +725,7 @@ static void gptimerA_callback(void) {
 static void encTask(void * pvParameters) {
     
     static const bool VERBOSE = false;
-    const int timer_flag_thresh = 128;
+    const int timer_flag_thresh = 32;
 
     encParams_t * params = (encParams_t *) pvParameters;
     char * TAG = params->TAG;
@@ -727,10 +744,6 @@ static void encTask(void * pvParameters) {
     int * pos = params->pos;
     int delay_ms = params->delay_ms;
     QueueHandle_t queue = params->queue;
-    //int circBuff_data[KEYPRESS_COMBO_LENGTH] = circBuff->buffer;
-
-    //circularBuffer 
-    //circBuff = {0};
 
     bool change_flag = true;
     bool sw_level = LOW;
@@ -765,47 +778,56 @@ static void encTask(void * pvParameters) {
         }
         // update gpio state
         rotary_encoder_poll_switch(encoder);
-        change_flag = (sw_level == encoder->state.sw_status) ? false : true;
+        change_flag = (sw_level == (encoder->state.sw_status)) ? false : true;
         switch(change_flag) {
             // Button is actuated
             case(true): 
-                ESP_LOGI(TAG, "CHANGE FLAG REGISTERED");
+                if (VERBOSE) ESP_LOGI(TAG, "CHANGE FLAG REGISTERED");
                 change_flag = false;
                 timer_count = 0;                                   // Reset the timer counts
                 sw_level = encoder->state.sw_status;               // Assign new level to temp var
                 app_toggleTimerRun(timer_handle, &timer_state);    // Start encoder switch timer
-                if (push_count%2 == 0 || push_count == 0) {
-                    push_key(circBuff, id);                            // Push recent press to circular buffer
-                    ESP_LOGI(TAG, "PUSHED KEY: %d", id);
+                if (push_count % 2 == 0 || push_count == 0) {      // Register every other edge
+                    push_key(circBuff, id);                        // Push recent press to circular buffer
+                    if (VERBOSE) ESP_LOGI(TAG, "PUSHED KEY: %d", id);
                     // Debug print the circular buffer entries
                     int start = circBuff->head;
-                    ESP_LOGI(TAG, "BUFF ENTRIES:");
+                    //ESP_LOGI(TAG, "BUFF ENTRIES:");
                     for (int i = 0; i < KEYPRESS_COMBO_LENGTH; i++) {
-                        ESP_LOGI(TAG, "Buffer Entry %d: %d", start, circBuff->buffer[start]);
+                        //ESP_LOGI(TAG, "Buffer Entry %d: %d", start, circBuff->buffer[start]);
                         start = (start + 1) % KEYPRESS_COMBO_LENGTH;
                     }
                 }
                 push_count++;
                 break;
             // Button is not actuated
-            default:    
+            default:
+                if (timer_count >= timer_flag_thresh) {
+                    if (VERBOSE) ESP_LOGI(TAG, "LONG PRESS DETECTED");
+                    timer_count = 0;
+                }
                 break;
         }
 
+        int target[] = {1, 1, 2};
+        int target2[] = {1, 2, 2};
         
-        //for (int i = 0; i <= NUM_COMBOS; i++) {
-            //if(check_combo(circBuff, keypress_combos[i])) {
-            int target[] = {1, 1, 1};
-            if(check_combo(circBuff, target)) {
-                ESP_LOGI(TAG, "GOT COMBO! '%s'", "fart"/*keypress_combo_names[7]*/);
-            }
-        //}
+        if(check_combo(circBuff, target)) {
+            if (VERBOSE) ESP_LOGI(TAG, "GOT COMBO! '%s'", "on off"/*keypress_combo_names[7]*/);
+            toggle_on_off_flag = true;
+            clear_buffer(circBuff);
+        }
+        else if(check_combo(circBuff, target2)) {
+            if (VERBOSE) ESP_LOGI(TAG, "GOT COMBO! '%s'", "change chan"/*keypress_combo_names[7]*/);
+            change_channel_flag = true;
+            clear_buffer(circBuff);         // This is mutexed, circbuff entries are cleared to 0, so dont use 0 for a key
+        }
         
         if (VERBOSE) ESP_LOGI(TAG, "SW POLL - %s", gpio_status_names[encoder->state.sw_status]);
         
         if (*timerFlag) {
             timer_count+=1; // Increment count pre-emptively, as the timer is enabled and we wait for the flag to be initially set indicating a timer clock increment has passed
-            ESP_LOGI(TAG, "TIMER TRIG: %lu", timer_count);
+            if (VERBOSE) ESP_LOGI(TAG, "TIMER TRIG: %lu", timer_count);
             *timerFlag = false; // poll the switch and reset flags as necessary
         }
     }
@@ -825,11 +847,12 @@ void app_main(void) {
     static const char * TAG = "APP_MAIN";
     static const bool VERBOSE = false;
     esp_err_t ret = ESP_OK;
+    
+    static battery_states_t temp_battery_state;
 
     // Init UART2 for development port (to be replaced with/accompanied by BT)
     uart2_init(U2_BAUD);
     app_gpio_init();
-    gpio_set_level(LOWBATT_LED_PIN, 1);
 
     circularBuffer keyPress_combo_buff = {0};
     init_buffer(&keyPress_combo_buff);
@@ -844,13 +867,13 @@ void app_main(void) {
         .state = &stateA,
         .timer_handle = &gptimerA,
         .timer_cb = &gptimerA_callback,
-        .timer_top = 1000,
+        .timer_top = 1, // Timer compare match will reset this when reached. Use to count a number of elapsed timer cycles, and signify button press durations, or a count of presses within a duration
         .timerFlag = &timerAFlag,
         .pinA = ENCA_CHA_PIN,
         .pinB = ENCA_CHB_PIN,
         .pinSW = ENCA_SW_PIN,
         .comboBuff = &keyPress_combo_buff,
-        .id = 0,
+        .id = 1, // Using nonzero id's is essential as the circular buffer resets to zero
         .delay_ms = ENC_QUEUE_DELAY,
         .pos = &posA,
         .queue = xEncoderAQueue
@@ -864,13 +887,13 @@ void app_main(void) {
         .state = &stateB,
         .timer_handle = &gptimerB,
         .timer_cb = &gptimerB_callback,
-        .timer_top = 1000,
+        .timer_top = 1, // 1uS software timer, 1000 ticks per 1mS
         .timerFlag = &timerBFlag,
         .pinA = ENCB_CHA_PIN,
         .pinB = ENCB_CHB_PIN,
         .pinSW = ENCB_SW_PIN,
         .comboBuff = &keyPress_combo_buff,
-        .id = 1,                    // used for filling the button keypress combo circ buff
+        .id = 2,                    // used for filling the button keypress combo circ buff
         .pos = &posB,
         .delay_ms = ENC_QUEUE_DELAY,
         .queue = xEncoderBQueue
@@ -937,10 +960,22 @@ void app_main(void) {
     xTaskCreate(encTask, "encA", 2048*4, (void *)&encAParams, configMAX_PRIORITIES - 1, NULL);
     xTaskCreate(encTask, "encB", 2048*4, (void *)&encBParams, configMAX_PRIORITIES - 1, NULL);
 
+    //temp_battery_state = BAT_LOW;
+
     bool pin = 1;
     while(1) {
 
         vbat_assign_state(&batteryState, SCALE_VBAT(vbat_filt));
+        if (temp_battery_state != batteryState) {
+            temp_battery_state = batteryState;
+            if (temp_battery_state == BAT_LOW) {
+                gpio_set_level(LOWBATT_LED_PIN, HIGH);
+            }
+            else {
+                gpio_set_level(LOWBATT_LED_PIN, LOW);
+            }
+        }
+            
         if (VERBOSE) {
             ESP_LOGI(TAG, "Battery State   : %s", batteryStateNames[batteryState]);
             ESP_LOGI(TAG, "Heartbeat State : %s", gpio_status_names[pin]);

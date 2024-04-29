@@ -52,9 +52,11 @@ extern const char * keypress_combo_names[NUM_COMBOS];
 
 void app_gpio_init(void);
 void init_buffer(circularBuffer *cb);
+void clear_buffer(circularBuffer *cb);
 void push_key(circularBuffer *cb, int key);
 int pop_key(circularBuffer *cb);
 bool check_combo(circularBuffer *cb, int * target);
+
 
 #ifdef __cplusplus
 }
