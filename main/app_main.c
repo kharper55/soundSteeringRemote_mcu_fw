@@ -91,69 +91,125 @@ disp_backlight_h bl;
 
 volatile bool timer0Flag = false;
 volatile bool timer1Flag = false;
+volatile bool change_channel_flag = false;
+volatile bool toggle_on_off_flag = false;
 
 /*================================ FUNCTION AND TASK DEFINITIONS ===================================*/
-
-/*---------------------------------------------------------------
-    Basic CRC32 Implementation (Little Endian)
----------------------------------------------------------------*/
-uint32_t app_compute_crc32(char * str, int data_len) {
-    return crc32_le(0, (const uint8_t *)str, strlen(str));
-}
 
 /*---------------------------------------------------------------
     UART2 TX FreeRTOS task
 ---------------------------------------------------------------*/
 static void txTask(void *arg) {
 
+    const bool VERBOSE_FLAG = true;
+
     static const char * TX_TASK_TAG = "TX_TASK";
     esp_log_level_set(TX_TASK_TAG, ESP_LOG_INFO);
 
     char * txData = (char *) malloc(TX_BUF_SIZE + 1);
-    char * crcBuff = (char *) malloc(sizeof(uint32_t) + 1);
+    char * txBuff_preCRC = (char *) malloc(TX_BUF_SIZE + 1);
 
     const int16_t POS_OFFSET = 30;
-    const char DELIM = '/';
+    const int CRC_LEN_HEX = 8;
+    const int8_t LENS[5] = {1, 1, 5, 5, 9};
 
     // both encoders should spit out counts between +=30
     // both pots -> might want to filter the adc counts, and then scale via bit shift (12 bit to 8 bit?)
-    static int16_t temp_azimuthPos = MIN_ENCODER_COUNTS; // -30
-    static int16_t temp_elevPos = MIN_ENCODER_COUNTS;    // -30
+    static int temp_azimuthPos = MIN_ENCODER_COUNTS; // -30
+    static int temp_elevPos = MIN_ENCODER_COUNTS;    // -30
     //static uint8_t temp_potc_counts = PCT_MIN; // 0
     //static uint8_t temp_potd_counts = PCT_MIN; // 0
-    static int16_t temp_potc_counts = 0; // 0
-    static int16_t temp_potd_counts = 0; // 0
+    static int temp_potc_counts = 0; // 0
+    static int temp_potd_counts = 0; // 0
     int16_t potc_scaled = 0;
     int16_t potd_scaled = 0;
-
-    // use some switch case and simple assignment to classify which code should be sent based on running system state
-    // also append the crc, use fixed width hex in order to omit delimiters
+    uint32_t crc = 0;
+    int flag = 0;
 
     while (1) {
         //if (xQueueReceive(sendData(TX_TASK_TAG, "Hello world") == pdTrue)) {}
-        //(int16_t)SCALE_VPOT_INVERT(vpotd_filt)
         potc_scaled = SCALE_VPOT_INVERT((vpotc_filt));
         potd_scaled = SCALE_VPOT_INVERT((vpotd_filt));
+        flag = NOP;
 
-        if ((posA != temp_azimuthPos) || (posB != temp_elevPos) || 
-            (potc_scaled != temp_potc_counts) || (potd_scaled != temp_potd_counts)) {
+        /* Pertinent typedef
+        typedef enum serial_cmds_t {
+            NOP                      = 0x0,
+            TOGGLE_ON_OFF            = 0x2,  // Hex code for togglining device on/off (i.e. power to the array)
+            CHANGE_CHANNEL           = 0x4,  // Hex code for changing only channel with one transaction
+            CHANGE_COORD             = 0x8,  // Hex code for changing only coordinate with one transaction
+            CHANGE_VOLUME            = 0xA,  // Hex code for changing only volume with one transaction
+            CHANGE_COORD_AND_VOLUME  = 0xC,  // Hex code for changing volume, channel, and coordinate with one transaction
+            REQUEST_INFO             = 0xE   // Hex code for requesting readback from the device
+        };
+        */
 
-            temp_azimuthPos = posA;
-            temp_elevPos = posB;
-            temp_potc_counts = potc_scaled;
-            temp_potd_counts = potd_scaled;        
+        // On received end, should pop 8 bytes off the end, compute a local crc, then compare the crc with the one that was transmitted
+        // If the crc mismatchyes, the n request another copy of the data until ok...
+        // This will require a generic info resend (just send all the info back becasue we dont know exactly what info was lost in the time past)
 
-            sprintf(txData,"%02X%02X%02X%02X", (uint8_t)(temp_azimuthPos + POS_OFFSET), (uint8_t)(temp_elevPos + POS_OFFSET), temp_potc_counts, temp_potd_counts);
+        if (!toggle_on_off_flag) {        // flag handled by pair of gptimer and gpio interrupt
+            if (!(change_channel_flag)) { // flag handled by pair of gptimer and gpio interrupt
+                if((posA != temp_azimuthPos) || (posB != temp_elevPos)) {
+                    temp_azimuthPos = posA;
+                    temp_elevPos = posB;
+                    flag = CHANGE_COORD; 
+                }
+                if((potc_scaled != temp_potc_counts) || (potd_scaled != temp_potd_counts)) {
+                    temp_potc_counts = potc_scaled;
+                    temp_potd_counts = potd_scaled;
+                    flag = (flag == CHANGE_COORD) ? CHANGE_COORD_AND_VOLUME : CHANGE_VOLUME;
+                }
+            }
+            else {
+                flag = CHANGE_CHANNEL;
+            }
+        }
+        else {
+            flag = TOGGLE_ON_OFF;
+        }
+
+        if(flag) {
+            switch(flag) {
+                case TOGGLE_ON_OFF:           // flag = 0x0. requires action from artix7, or alternatively just send pwm_buff_en and load_switch_en low on the controller.
+                    sprintf(txData, "%01X", flag);
+                    break;
+                case CHANGE_CHANNEL:          // flag = 0x2. requires action from artix7
+                    sprintf(txData, "%01X", flag);
+                    break;
+                case CHANGE_COORD:            // flag = 0x4. requires action from artix7
+                    sprintf(txData, "%01X%02X%02X", flag, (uint8_t)(temp_azimuthPos + POS_OFFSET), (uint8_t)(temp_elevPos + POS_OFFSET));
+                    break;
+                case CHANGE_VOLUME:           // flag = 0x6. requires nothing from artix7
+                    sprintf(txData, "%01X%02X%02X", flag, temp_potc_counts, temp_potd_counts);
+                    break;
+                case CHANGE_COORD_AND_VOLUME: // flag = 0x8. requires action from artix7 and esp32
+                    sprintf(txData, "%01X%02X%02X%02X%02X", flag, (uint8_t)(temp_azimuthPos + POS_OFFSET), (uint8_t)(temp_elevPos + POS_OFFSET), temp_potc_counts, temp_potd_counts);
+                    break;
+                default:                      // Break
+                    break;
+            }
+
             const int len = strlen(txData);
-            uint32_t crc = app_compute_crc32(txData, len);
-            const int txBytes = uart_write_bytes(UART_NUM_2, txData, len);
-            ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s/%lu'", txBytes, txData, crc);   
+            crc = app_compute_crc32(txData, len);
+
+            if (VERBOSE_FLAG) {
+                ESP_LOGI(TX_TASK_TAG, "Flag: %d, Data: %s, CRC: %08lX", flag, txData, crc);
+            }
+        
+            snprintf(txBuff_preCRC, len + CRC_LEN_HEX + 1, "%s%08lX", txData, crc); // Append CRC to data
+            const int txBytes = uart_write_bytes(UART_NUM_2, txBuff_preCRC, strlen(txBuff_preCRC)); // Write data to UART
+
+            if (VERBOSE_FLAG) {
+                ESP_LOGI(TX_TASK_TAG, "Wrote %d bytes: '%s'", txBytes, txBuff_preCRC);
+            }
         }
 
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 
     free(txData);
+    free(txBuff_preCRC);
 }
 
 /*---------------------------------------------------------------
@@ -164,6 +220,8 @@ static void rxTask(void *arg) {
     static const char * RX_TASK_TAG = "RX_TASK";
     esp_log_level_set(RX_TASK_TAG, ESP_LOG_INFO);
     uint8_t* data = (uint8_t*) malloc(RX_BUF_SIZE + 1);
+
+    // With the opposite end of the twisted pair harness floaitng, when txing, ew get erroneous reads
 
     while (1) {
         const int rxBytes = uart_read_bytes(UART_NUM_2, data, RX_BUF_SIZE, 10 / portTICK_PERIOD_MS);
@@ -881,7 +939,7 @@ void app_main(void) {
 
     // Create FreeRTOS tasks to handle various peripherals/functions
     xTaskCreate(rxTask,  "uart_rx_task",  1024*2, NULL, configMAX_PRIORITIES - 1,   NULL);
-    xTaskCreate(txTask,  "uart_tx_task",  1024*2, NULL, configMAX_PRIORITIES - 2, NULL);
+    xTaskCreate(txTask,  "uart_tx_task",  1024*4, NULL, configMAX_PRIORITIES - 2, NULL);
     xTaskCreate(adcTask, "vpotd_task", 1024*2, (void *)&vpotdParams, configMAX_PRIORITIES - 2,  NULL);
     xTaskCreate(adcTask, "vpotc_task", 1024*2, (void *)&vpotcParams, configMAX_PRIORITIES - 2,  NULL);
     xTaskCreate(adcTask, "vbat_task", 1024*2, (void *)&vbatParams, configMAX_PRIORITIES - 2,  NULL);

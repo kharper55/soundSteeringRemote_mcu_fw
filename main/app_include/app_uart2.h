@@ -17,6 +17,8 @@ extern "C" {
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "driver/adc.h"
+#include "app_include/app_adc.h"
 
 // UART0 setup is taken care of at startup and is used by the log library
 // This can be changed via menuconfig
@@ -30,14 +32,27 @@ extern "C" {
 #define TX_BUF_SIZE         (const int) 512
 
 typedef enum serial_cmds_t {
-    TOGGLE_ON_OFF             = 0x0,  // Hex code for togglining device on/off (i.e. power to the array)
-    CHANGE_CHANNEL            = 0x2,  // Hex code for changing only channel with one transaction
-    CHANGE_VOLUME             = 0x4,  // Hex code for changing only volume with one transaction
-    CHANGE_COORD              = 0x6,  // Hex code for changing only coordinate with one transaction
-    CHANGE_CHANNEL_AND_VOLUME = 0x8,  // Hex code for changing both channel and volume with one transaction
-    CHANGE_VOLUME_AND_COORD   = 0xA,  // Hex code for changing both volume and coordination with one transaction
-    CHANGE_ALL                = 0xC,  // Hex code for changing volume, channel, and coordination with one transaction
-    REQUEST_INFO              = 0xE   // Hex code for requesting readback from the device
+    NOP                      = 0x0,
+    TOGGLE_ON_OFF            = 0x2,  // Hex code for togglining device on/off (i.e. power to the array)
+    CHANGE_CHANNEL           = 0x4,  // Hex code for changing only channel with one transaction
+    CHANGE_COORD             = 0x8,  // Hex code for changing only coordinate with one transaction
+    CHANGE_VOLUME            = 0xA,  // Hex code for changing only volume with one transaction
+    CHANGE_COORD_AND_VOLUME  = 0xC,  // Hex code for changing volume, channel, and coordinate with one transaction
+    REQUEST_INFO             = 0xE   // Hex code for requesting readback from the device
+};
+
+typedef struct tx_task_parms_t {
+    char * TAG;
+    adc_oneshot_unit_handle_t * handle;
+    adc_cali_handle_t * cali_handle;
+    adc_unit_t unit;
+    adc_channel_t channel;
+    adc_atten_t atten;
+    adc_filter_t * filt;
+    int delay_ms;
+    int * vraw;
+    int * vcal;
+    int * vfilt;
 };
 
 void uart2_init(int baud);

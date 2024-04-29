@@ -15,6 +15,7 @@ extern "C" {
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_system.h"
 #include "esp_log.h"
@@ -30,6 +31,7 @@ extern "C" {
 // Static functions
 
 // User functions
+uint32_t app_compute_crc32(char * str, int data_len);
 
 #ifdef __cplusplus
 }
