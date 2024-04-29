@@ -45,7 +45,7 @@ typedef struct {
     gpio_num_t pinB;
     gpio_num_t pinSW;
     circularBuffer * comboBuff;
-    uint8_t id;
+    int id;
     int * pos;
     int delay_ms;
     QueueHandle_t queue;

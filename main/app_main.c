@@ -64,7 +64,7 @@ extern uint32_t batteryColors[3]; // Declare as extern
 extern const char app_icons[][4]; // Declare as extern
 extern const char * gpio_status_names[2];
 extern const char * keypress_combo_names[NUM_COMBOS];
-extern const uint8_t keypress_combos[KEYPRESS_COMBO_LENGTH][NUM_COMBOS];
+extern int keypress_combos[NUM_COMBOS][KEYPRESS_COMBO_LENGTH];
 
 int posA = 0; // Azimuth angle, -30 -> 30
 int posB = 0; // Elevation angle, -30 -> 30
@@ -723,11 +723,14 @@ static void encTask(void * pvParameters) {
     gpio_num_t pinB = params->pinB;
     gpio_num_t pinSW = params->pinSW;
     circularBuffer * circBuff = params->comboBuff;
-    const uint8_t id = params->id;
+    int id = params->id;
     int * pos = params->pos;
     int delay_ms = params->delay_ms;
     QueueHandle_t queue = params->queue;
     //int circBuff_data[KEYPRESS_COMBO_LENGTH] = circBuff->buffer;
+
+    //circularBuffer 
+    //circBuff = {0};
 
     bool change_flag = true;
     bool sw_level = LOW;
@@ -775,21 +778,12 @@ static void encTask(void * pvParameters) {
                     push_key(circBuff, id);                            // Push recent press to circular buffer
                     ESP_LOGI(TAG, "PUSHED KEY: %d", id);
                     // Debug print the circular buffer entries
-                    char buffer_str[30];  // Assuming each entry is less than 10 characters
-
-                    buffer_str[0] = '\0';  // Initialize an empty string
-
-                
-                    // Debug print the circular buffer entries
                     int start = circBuff->head;
+                    ESP_LOGI(TAG, "BUFF ENTRIES:");
                     for (int i = 0; i < KEYPRESS_COMBO_LENGTH; i++) {
-                        char entry_str[10];  // Assuming each entry is less than 10 characters
-                        snprintf(entry_str, sizeof(entry_str), "%d", circBuff->buffer[start]);  // Convert buffer entry to string
-                        strcat(buffer_str, entry_str);  // Concatenate entry to buffer string
+                        ESP_LOGI(TAG, "Buffer Entry %d: %d", start, circBuff->buffer[start]);
                         start = (start + 1) % KEYPRESS_COMBO_LENGTH;
                     }
-
-                    ESP_LOGI(TAG, "BUFF ENTRIES: %s", buffer_str);
                 }
                 push_count++;
                 break;
@@ -797,14 +791,17 @@ static void encTask(void * pvParameters) {
             default:    
                 break;
         }
+
+        
+        //for (int i = 0; i <= NUM_COMBOS; i++) {
+            //if(check_combo(circBuff, keypress_combos[i])) {
+            int target[] = {1, 1, 1};
+            if(check_combo(circBuff, target)) {
+                ESP_LOGI(TAG, "GOT COMBO! '%s'", "fart"/*keypress_combo_names[7]*/);
+            }
+        //}
         
         if (VERBOSE) ESP_LOGI(TAG, "SW POLL - %s", gpio_status_names[encoder->state.sw_status]);
-
-        for (int i = 0; i <= NUM_COMBOS; i++) {
-            if(check_combo(circBuff, keypress_combos[i])) {
-                ESP_LOGI(TAG, "GOT COMBO! '%s'", keypress_combo_names[i]);
-            }
-        }
         
         if (*timerFlag) {
             timer_count+=1; // Increment count pre-emptively, as the timer is enabled and we wait for the flag to be initially set indicating a timer clock increment has passed
@@ -834,7 +831,7 @@ void app_main(void) {
     app_gpio_init();
     gpio_set_level(LOWBATT_LED_PIN, 1);
 
-    circularBuffer keyPress_combo_buff;
+    circularBuffer keyPress_combo_buff = {0};
     init_buffer(&keyPress_combo_buff);
 
     gptimer_handle_t gptimerA = NULL;
@@ -853,7 +850,7 @@ void app_main(void) {
         .pinB = ENCA_CHB_PIN,
         .pinSW = ENCA_SW_PIN,
         .comboBuff = &keyPress_combo_buff,
-        .id = 1,
+        .id = 0,
         .delay_ms = ENC_QUEUE_DELAY,
         .pos = &posA,
         .queue = xEncoderAQueue
@@ -873,7 +870,7 @@ void app_main(void) {
         .pinB = ENCB_CHB_PIN,
         .pinSW = ENCB_SW_PIN,
         .comboBuff = &keyPress_combo_buff,
-        .id = 0,                    // used for filling the button keypress combo circ buff
+        .id = 1,                    // used for filling the button keypress combo circ buff
         .pos = &posB,
         .delay_ms = ENC_QUEUE_DELAY,
         .queue = xEncoderBQueue
@@ -937,8 +934,8 @@ void app_main(void) {
     xTaskCreate(displayTask, "display_task", 4096 * 2, NULL, configMAX_PRIORITIES, NULL);
 
     // Play with half step resolution to register direction change immediately
-    xTaskCreate(encTask, "encA", 1024*4, (void *)&encAParams, configMAX_PRIORITIES - 1, NULL);
-    xTaskCreate(encTask, "encB", 1024*4, (void *)&encBParams, configMAX_PRIORITIES - 1, NULL);
+    xTaskCreate(encTask, "encA", 2048*4, (void *)&encAParams, configMAX_PRIORITIES - 1, NULL);
+    xTaskCreate(encTask, "encB", 2048*4, (void *)&encBParams, configMAX_PRIORITIES - 1, NULL);
 
     bool pin = 1;
     while(1) {
@@ -948,6 +945,7 @@ void app_main(void) {
             ESP_LOGI(TAG, "Battery State   : %s", batteryStateNames[batteryState]);
             ESP_LOGI(TAG, "Heartbeat State : %s", gpio_status_names[pin]);
         }
+
         gpio_set_level(HEARTBEAT_LED_PIN, pin);
         pin = !pin;
 

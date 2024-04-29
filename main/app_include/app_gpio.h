@@ -30,7 +30,7 @@ extern "C" {
 
 #define KEYPRESS_COMBO_LENGTH   3
 #define NUM_COMBOS              8
-#define COMBO_CHECK_DELAY       1
+#define COMBO_CHECK_DELAY       10
 
 // Typedefs
 typedef enum {
@@ -47,14 +47,14 @@ typedef struct {
 } circularBuffer;
 
 extern const char * gpio_status_names[2];
-extern const uint8_t keypress_combos[KEYPRESS_COMBO_LENGTH][NUM_COMBOS];
+extern int keypress_combos[NUM_COMBOS][KEYPRESS_COMBO_LENGTH];
 extern const char * keypress_combo_names[NUM_COMBOS];
 
 void app_gpio_init(void);
 void init_buffer(circularBuffer *cb);
-void push_key(circularBuffer *cb, uint8_t key);
-uint8_t pop_key(circularBuffer *cb);
-bool check_combo(circularBuffer *cb, uint8_t * target);
+void push_key(circularBuffer *cb, int key);
+int pop_key(circularBuffer *cb);
+bool check_combo(circularBuffer *cb, int * target);
 
 #ifdef __cplusplus
 }

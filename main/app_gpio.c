@@ -7,7 +7,7 @@ const char * gpio_status_names[2] = {
     "HIGH"
 };
 
-const uint8_t keypress_combos[KEYPRESS_COMBO_LENGTH][NUM_COMBOS] = {
+int keypress_combos[NUM_COMBOS][KEYPRESS_COMBO_LENGTH] = {
     {0, 0, 0},
     //{1, 0, 0},
     //{0, 1, 1}
@@ -53,64 +53,57 @@ void app_gpio_init(void) {
 
 }
 
-/*---------------------------------------------------------------
-    Circular Buffer Stuff
----------------------------------------------------------------*/
 // Initialize the circular buffer
 void init_buffer(circularBuffer *cb) {
+    for (int i = 0; i < KEYPRESS_COMBO_LENGTH; i++) {
+        cb->buffer[i] = 0;
+    }
     cb->head = 0;
     cb->tail = 0;
     cb->mutex = xSemaphoreCreateMutex();  // Create mutex
+    cb->size = KEYPRESS_COMBO_LENGTH;
 }
 
-/*---------------------------------------------------------------
-    Circular Buffer Stuff
----------------------------------------------------------------*/
 // Push a key into the circular buffer
-void push_key(circularBuffer *cb, uint8_t key) {
+void push_key(circularBuffer *cb, int key) {
     xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
     cb->buffer[cb->tail] = key;
-    cb->tail = (cb->tail + 1) % KEYPRESS_COMBO_LENGTH;
+    cb->tail = (cb->tail + 1) % cb->size;
     if (cb->tail == cb->head) {
-        cb->head = (cb->head + 1) % KEYPRESS_COMBO_LENGTH;
+        cb->head = (cb->head + 1) % cb->size; // Increment head to drop oldest element
     }
     xSemaphoreGive(cb->mutex);  // Release mutex after accessing buffer
 }
 
-
-/*---------------------------------------------------------------
-    Circular Buffer Stuff
----------------------------------------------------------------*/
 // Pop a key from the circular buffer
-uint8_t pop_key(circularBuffer *cb) {
+int pop_key(circularBuffer *cb) {
     xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
     if (cb->head == cb->tail) {
         xSemaphoreGive(cb->mutex);  // Release mutex if buffer is empty
         return -1;
     }
-    uint8_t key = cb->buffer[cb->head];
-    cb->head = (cb->head + 1) % KEYPRESS_COMBO_LENGTH;
+    int key = cb->buffer[cb->head];
+    cb->head = (cb->head + 1) % cb->size;
     xSemaphoreGive(cb->mutex);  // Release mutex after accessing buffer
     return key;
 }
 
-/*---------------------------------------------------------------
-    Circular Buffer Stuff
----------------------------------------------------------------*/
-// Check if a certain key combination exists in the circular buffer
-bool check_combo(circularBuffer *cb, uint8_t * target) {
+bool check_combo(circularBuffer *cb, int *target) {
     xSemaphoreTake(cb->mutex, COMBO_CHECK_DELAY);  // Take mutex before accessing buffer
     int target_index = 0;
-    for (int i = cb->head; i != cb->tail; i = (i + 1) % KEYPRESS_COMBO_LENGTH) {
-        if (cb->buffer[i] == target[target_index]) {
+    int buffer_index = cb->head;
+    for (int i = 0; i < cb->size; i++) {
+        ESP_LOGI(GPIO_TAG, "Buffer[%d]: %d, Target[%d]: %d", buffer_index, cb->buffer[buffer_index], target_index, target[target_index]);
+        if (cb->buffer[buffer_index] == target[target_index]) {
             target_index++;
-            if (target_index == KEYPRESS_COMBO_LENGTH) {
+            if (target_index == cb->size) {
                 xSemaphoreGive(cb->mutex);  // Release mutex before returning
                 return true; // Full combo matched
             }
         } else {
             target_index = 0;
         }
+        buffer_index = (buffer_index + 1) % cb->size;
     }
     xSemaphoreGive(cb->mutex);  // Release mutex before returning
     return false; // Combo not found
