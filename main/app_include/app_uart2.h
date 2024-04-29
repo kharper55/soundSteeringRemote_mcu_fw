@@ -38,7 +38,7 @@ typedef enum serial_cmds_t {
     CHANGE_COORD             = 0x8,  // Hex code for changing only coordinate with one transaction
     CHANGE_VOLUME            = 0xA,  // Hex code for changing only volume with one transaction
     CHANGE_COORD_AND_VOLUME  = 0xC,  // Hex code for changing volume, channel, and coordinate with one transaction
-    REQUEST_INFO             = 0xE   // Hex code for requesting readback from the device
+    REQUEST_INFO             = 0xE   // Hex code for requesting readback from the device. Not currently implemented
 };
 
 typedef struct tx_task_parms_t {
