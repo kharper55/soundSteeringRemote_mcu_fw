@@ -33,6 +33,8 @@ extern "C" {
 // User functions
 uint32_t app_compute_crc32(char * str, int data_len);
 
+
+
 #ifdef __cplusplus
 }
 #endif

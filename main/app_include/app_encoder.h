@@ -15,6 +15,8 @@ extern "C" {
 
 // --------------- Includes --------------- //
 #include "rotary_encoder.h"
+#include "app_include/app_gpio.h"
+#include "app_include/app_timer.h"
 
 // ENCODER/SWITCH INPUTS -- ENCA is for menu navigation in addition to steering
 #define ENCA_CHA_PIN            GPIO_NUM_27 
@@ -35,9 +37,17 @@ typedef struct {
     rotary_encoder_info_t * encoder;
     rotary_encoder_event_t * event;
     rotary_encoder_state_t * state;
+    gptimer_handle_t * timer_handle;
+    void (*timer_cb)(int);
+    uint32_t timer_top;
+    volatile bool * timerFlag;
     gpio_num_t pinA;
     gpio_num_t pinB;
     gpio_num_t pinSW;
+    circularBuffer * comboBuff;
+    uint8_t id;
+    int * pos;
+    int delay_ms;
     QueueHandle_t queue;
 } encParams_t;
 

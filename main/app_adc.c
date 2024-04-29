@@ -9,6 +9,32 @@
 static const char * ADC_TAG = "ADC";
 
 /*---------------------------------------------------------------
+    ADC Filter, Circular Buffer Averaging Function
+---------------------------------------------------------------*/
+// Refactored to use a custom struct type containing previously static defined information
+float adc_filter(int value, adc_filter_t * filterObject) {
+
+    int denominator = 1;
+    int temp = 0;
+
+   if (filterObject->count < filterObject->buff_len) {
+        if (filterObject->bufferFullFlag) temp = filterObject->buff[filterObject->count]; // Get the current value in the circular buffer about to be overwritten...
+        filterObject->buff[filterObject->count] = value;   
+        filterObject->sum += (filterObject->buff[filterObject->count] - temp); // Add to the running sum of circular buffer entries the difference between the newest value added and the value that was previously in its position, so that additions dont need to be recompleted.
+        filterObject->count++;
+    }
+
+    if (filterObject->count == filterObject->buff_len) {
+        if (!filterObject->bufferFullFlag) filterObject->bufferFullFlag = true;
+        filterObject->count = 0;
+    }
+
+    denominator = (filterObject->bufferFullFlag) ? filterObject->buff_len : filterObject->count;
+
+    return (filterObject->sum / (float)denominator);
+}
+
+/*---------------------------------------------------------------
     ADC Calibration Init
 ---------------------------------------------------------------*/
 /*static*/ bool adc_calibration_init(adc_unit_t unit, adc_channel_t channel, 

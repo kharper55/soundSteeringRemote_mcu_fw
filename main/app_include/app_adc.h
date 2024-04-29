@@ -95,6 +95,8 @@ adc_oneshot_unit_handle_t adc1_handle = NULL;
 /*static*/ void adc_continuous_init(adc_continuous_handle_t * adc_handle, adc_unit_t * units, 
                                 adc_channel_t * channels, uint8_t num_channels);
 
+float adc_filter(int value, adc_filter_t * filterObject);
+
 void app_adc_init();
 
 #ifdef __cplusplus

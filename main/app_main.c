@@ -62,6 +62,9 @@ extern uint32_t knobColors[2];    // Declare as extern
 extern uint32_t textColors[2];    // Declare as extern
 extern uint32_t batteryColors[3]; // Declare as extern
 extern const char app_icons[][4]; // Declare as extern
+extern const char * gpio_status_names[2];
+extern const char * keypress_combo_names[NUM_COMBOS];
+extern const uint8_t keypress_combos[KEYPRESS_COMBO_LENGTH][NUM_COMBOS];
 
 int posA = 0; // Azimuth angle, -30 -> 30
 int posB = 0; // Elevation angle, -30 -> 30
@@ -89,10 +92,11 @@ adc_filter_t vpotc_filt_handle = {0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 10, fals
 
 disp_backlight_h bl;
 
-volatile bool timer0Flag = false;
-volatile bool timer1Flag = false;
+volatile bool timerAFlag = false;
+volatile bool timerBFlag = false;
 volatile bool change_channel_flag = false;
 volatile bool toggle_on_off_flag = false;
+
 
 /*================================ FUNCTION AND TASK DEFINITIONS ===================================*/
 
@@ -232,32 +236,6 @@ static void rxTask(void *arg) {
     }
 
     free(data);
-}
-
-/*---------------------------------------------------------------
-    ADC Filter, Circular Buffer Averaging Function
----------------------------------------------------------------*/
-// Refactored to use a custom struct type containing previously static defined information
-static float adc_filter(int value, adc_filter_t * filterObject) {
-
-    int denominator = 1;
-    int temp = 0;
-
-   if (filterObject->count < filterObject->buff_len) {
-        if (filterObject->bufferFullFlag) temp = filterObject->buff[filterObject->count]; // Get the current value in the circular buffer about to be overwritten...
-        filterObject->buff[filterObject->count] = value;   
-        filterObject->sum += (filterObject->buff[filterObject->count] - temp); // Add to the running sum of circular buffer entries the difference between the newest value added and the value that was previously in its position, so that additions dont need to be recompleted.
-        filterObject->count++;
-    }
-
-    if (filterObject->count == filterObject->buff_len) {
-        if (!filterObject->bufferFullFlag) filterObject->bufferFullFlag = true;
-        filterObject->count = 0;
-    }
-
-    denominator = (filterObject->bufferFullFlag) ? filterObject->buff_len : filterObject->count;
-
-    return (filterObject->sum / (float)denominator);
 }
 
 /*---------------------------------------------------------------
@@ -714,70 +692,60 @@ static void displayTask(void *pvParameter) {
     vTaskDelete(NULL);
 }
 
-/*---------------------------------------------------------------
-    Rotary Encoder task
----------------------------------------------------------------*/
-static void encATask(void * pvParameters) {
-
-    const bool VERBOSE = false;
-
-    encParams_t * params = (encParams_t *) pvParameters;
-    char * TAG = params->TAG;
-    rotary_encoder_info_t * encoder = params->encoder;
-    rotary_encoder_event_t * event = params->event;
-    rotary_encoder_state_t * state = params->state;
-    //rotary_encoder_state_t * sw_int_en = params->;
-    gpio_num_t pinA = params->pinA;
-    gpio_num_t pinB = params->pinB;
-    gpio_num_t pinSW = params->pinSW;
-    QueueHandle_t queue = params->queue;
-
-    encoder_init(encoder, pinA, pinB, pinSW, false, true);
-
-    // Create a queue for events from the rotary encoder driver.
-    // Tasks can read from this queue to receive up to date position information.
-    queue = rotary_encoder_create_queue();
-    ESP_ERROR_CHECK(rotary_encoder_set_queue(encoder, queue));
-
-    while(1) {
-
-        // Wait for incoming events on the event queue.
-        if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
-            posA = (int)event->state.position;
-        }
-        rotary_encoder_poll_switch(encoder); // This call updates the struct member for encoder sw_status. Should maybe use a queue idk
-        //ESP_LOGI(TAG, "POLL: %d", encoder->state.sw_status);
-
-        //else {
-        //    // Poll current position and direction
-        //    ESP_ERROR_CHECK(rotary_encoder_get_state(encoder, &stateA));
-        //    posA = (int)stateA.position;
-        //    if (VERBOSE) {
-        //        ESP_LOGI(TAG, "Poll: pos %d, dir %s, sw %d", (int)stateA.position,
-        //                stateA.direction ? (stateA.direction == ROTARY_ENCODER_DIRECTION_CLOCKWISE ? "CW" : "CCW") : "NOT_SET", (int)stateA.sw_status);
-        //    }
-        //}
-    }
+// should definitely refactor these and pass parameters to the callback function on task creation
+static void gptimerB_callback(void) {
+    timerAFlag = true;
 }
 
-// should definitely refactor these and pass parameters to the callback function on task creation
+static void gptimerA_callback(void) {
+    timerBFlag = true;
+}
 
 /*---------------------------------------------------------------
     Rotary Encoder task
+    Generic, pass params for particular behavior
 ---------------------------------------------------------------*/
-static void encBTask(void * pvParameters) {
+static void encTask(void * pvParameters) {
     
-    const bool VERBOSE = false;
+    static const bool VERBOSE = false;
+    const int timer_flag_thresh = 128;
 
     encParams_t * params = (encParams_t *) pvParameters;
     char * TAG = params->TAG;
     rotary_encoder_info_t * encoder = params->encoder;
     rotary_encoder_event_t * event = params->event;
     rotary_encoder_state_t * state = params->state;
+    gptimer_handle_t * timer_handle = params->timer_handle;
+    void (*timer_cb)(int) = params->timer_cb;
+    uint32_t timer_top = params->timer_top;
+    volatile bool * timerFlag = params->timerFlag;
     gpio_num_t pinA = params->pinA;
     gpio_num_t pinB = params->pinB;
     gpio_num_t pinSW = params->pinSW;
+    circularBuffer * circBuff = params->comboBuff;
+    const uint8_t id = params->id;
+    int * pos = params->pos;
+    int delay_ms = params->delay_ms;
     QueueHandle_t queue = params->queue;
+    //int circBuff_data[KEYPRESS_COMBO_LENGTH] = circBuff->buffer;
+
+    bool change_flag = true;
+    bool sw_level = LOW;
+    int push_count = 0;
+
+    uint32_t timer_count = 0;
+
+    esp_err_t ret = ESP_OK;
+
+    gptimer_state_t timer_state = {
+        .timerHandle = timer_handle,
+        .running = false
+    };
+
+    ret = app_initTimer(timer_handle, timer_cb, timer_top, false);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Couldn't initialize timer!");
+    }
 
     encoder_init(encoder, pinA, pinB, pinSW, false, true);
 
@@ -786,37 +754,64 @@ static void encBTask(void * pvParameters) {
     queue = rotary_encoder_create_queue();
     ESP_ERROR_CHECK(rotary_encoder_set_queue(encoder, queue));
 
-    // Use a temp var and reassign the global enc state entry upon mismatches only
-    // Currently not registering button presses
-
     while(1) {
 
         // Wait for incoming events on the event queue.
-        if (xQueueReceive(queue, event, ENC_QUEUE_DELAY / portTICK_PERIOD_MS)) {
-            posB = (int)event->state.position; // literally everything except for this line is oop approach. need to phase out globals
+        if (xQueueReceive(queue, event, pdMS_TO_TICKS(delay_ms))) {
+            *pos = (int)event->state.position;
         }
         // update gpio state
         rotary_encoder_poll_switch(encoder);
+        change_flag = (sw_level == encoder->state.sw_status) ? false : true;
+        switch(change_flag) {
+            // Button is actuated
+            case(true): 
+                ESP_LOGI(TAG, "CHANGE FLAG REGISTERED");
+                change_flag = false;
+                timer_count = 0;                                   // Reset the timer counts
+                sw_level = encoder->state.sw_status;               // Assign new level to temp var
+                app_toggleTimerRun(timer_handle, &timer_state);    // Start encoder switch timer
+                if (push_count%2 == 0 || push_count == 0) {
+                    push_key(circBuff, id);                            // Push recent press to circular buffer
+                    ESP_LOGI(TAG, "PUSHED KEY: %d", id);
+                    // Debug print the circular buffer entries
+                    char buffer_str[30];  // Assuming each entry is less than 10 characters
 
-        // Reset the encoder counts
-        //if (MAX_ENCODER_COUNTS && (posB >= MAX_ENCODER_COUNTS || posB <= MIN_ENCODER_COUNTS)) {
-        //    //ESP_ERROR_CHECK(rotary_encoder_reset(encoder));
-        //    ESP_ERROR_CHECK(rotary_encoder_hold(encoder));
-        //}
-        //
-        //else if ((posB == 0) && (int)state->direction == ROTARY_ENCODER_DIRECTION_COUNTER_CLOCKWISE) {
-        //    ESP_ERROR_CHECK(rotary_encoder_wrap(encoder, MAX_ENCODER_COUNTS - 1));
-        //    posB = (int)state->position;
-        //}
+                    buffer_str[0] = '\0';  // Initialize an empty string
+
+                
+                    // Debug print the circular buffer entries
+                    int start = circBuff->head;
+                    for (int i = 0; i < KEYPRESS_COMBO_LENGTH; i++) {
+                        char entry_str[10];  // Assuming each entry is less than 10 characters
+                        snprintf(entry_str, sizeof(entry_str), "%d", circBuff->buffer[start]);  // Convert buffer entry to string
+                        strcat(buffer_str, entry_str);  // Concatenate entry to buffer string
+                        start = (start + 1) % KEYPRESS_COMBO_LENGTH;
+                    }
+
+                    ESP_LOGI(TAG, "BUFF ENTRIES: %s", buffer_str);
+                }
+                push_count++;
+                break;
+            // Button is not actuated
+            default:    
+                break;
+        }
+        
+        if (VERBOSE) ESP_LOGI(TAG, "SW POLL - %s", gpio_status_names[encoder->state.sw_status]);
+
+        for (int i = 0; i <= NUM_COMBOS; i++) {
+            if(check_combo(circBuff, keypress_combos[i])) {
+                ESP_LOGI(TAG, "GOT COMBO! '%s'", keypress_combo_names[i]);
+            }
+        }
+        
+        if (*timerFlag) {
+            timer_count+=1; // Increment count pre-emptively, as the timer is enabled and we wait for the flag to be initially set indicating a timer clock increment has passed
+            ESP_LOGI(TAG, "TIMER TRIG: %lu", timer_count);
+            *timerFlag = false; // poll the switch and reset flags as necessary
+        }
     }
-}
-
-static void gptimer0_callback(void) {
-    timer0Flag = true;
-}
-
-static void gptimer1_callback(void) {
-    timer1Flag = true;
 }
 
 /*============================================ APP_MAIN ============================================*/
@@ -831,48 +826,36 @@ static void gptimer1_callback(void) {
 void app_main(void) {
 
     static const char * TAG = "APP_MAIN";
+    static const bool VERBOSE = false;
     esp_err_t ret = ESP_OK;
 
     // Init UART2 for development port (to be replaced with/accompanied by BT)
     uart2_init(U2_BAUD);
     app_gpio_init();
     gpio_set_level(LOWBATT_LED_PIN, 1);
-    
-    gptimer_handle_t gptimer0 = NULL;
-    gptimer_handle_t gptimer1 = NULL;
 
-    gptimer_state_t gptimer0_state = {
-        .timerHandle = &gptimer0,
-        .running = false
-    };
+    circularBuffer keyPress_combo_buff;
+    init_buffer(&keyPress_combo_buff);
 
-    gptimer_state_t gptimer1_state = {
-        .timerHandle = &gptimer0,
-        .running = false
-    };
-
-    ret = app_initTimer(&gptimer0, gptimer0_callback, 100, false);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Couldn't initialize timer!");
-    }
-
-    ret = app_initTimer(&gptimer1, gptimer1_callback, 750, false);
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Couldn't initialize timer!");
-    }
-
-    // GRRR! Im using lots of globals. I hate embedded!
-    //app_toggleTimerRun(&gptimer0, &gptimer0_state);
-    //app_toggleTimerRun(&gptimer1, &gptimer1_state);
+    gptimer_handle_t gptimerA = NULL;
+    gptimer_handle_t gptimerB = NULL;
 
     encParams_t encAParams = {
         .TAG = "ENC_A",
         .encoder = &encA,
         .event = &eventA,
         .state = &stateA,
+        .timer_handle = &gptimerA,
+        .timer_cb = &gptimerA_callback,
+        .timer_top = 1000,
+        .timerFlag = &timerAFlag,
         .pinA = ENCA_CHA_PIN,
         .pinB = ENCA_CHB_PIN,
         .pinSW = ENCA_SW_PIN,
+        .comboBuff = &keyPress_combo_buff,
+        .id = 1,
+        .delay_ms = ENC_QUEUE_DELAY,
+        .pos = &posA,
         .queue = xEncoderAQueue
     };
 
@@ -882,9 +865,17 @@ void app_main(void) {
         .encoder = &encB,
         .event = &eventB,
         .state = &stateB,
+        .timer_handle = &gptimerB,
+        .timer_cb = &gptimerB_callback,
+        .timer_top = 1000,
+        .timerFlag = &timerBFlag,
         .pinA = ENCB_CHA_PIN,
         .pinB = ENCB_CHB_PIN,
         .pinSW = ENCB_SW_PIN,
+        .comboBuff = &keyPress_combo_buff,
+        .id = 0,                    // used for filling the button keypress combo circ buff
+        .pos = &posB,
+        .delay_ms = ENC_QUEUE_DELAY,
         .queue = xEncoderBQueue
     };
 
@@ -943,29 +934,23 @@ void app_main(void) {
     xTaskCreate(adcTask, "vpotd_task", 1024*2, (void *)&vpotdParams, configMAX_PRIORITIES - 2,  NULL);
     xTaskCreate(adcTask, "vpotc_task", 1024*2, (void *)&vpotcParams, configMAX_PRIORITIES - 2,  NULL);
     xTaskCreate(adcTask, "vbat_task", 1024*2, (void *)&vbatParams, configMAX_PRIORITIES - 2,  NULL);
-    
     xTaskCreate(displayTask, "display_task", 4096 * 2, NULL, configMAX_PRIORITIES, NULL);
 
     // Play with half step resolution to register direction change immediately
-    // Also, currently from 1 rolls back to 23... AND -- update to sweep +- 30.. maybe just make them all partial arcs that displace from the center pos
-    xTaskCreate(encATask, "encA", 1024*2, (void *)&encAParams, configMAX_PRIORITIES - 1, NULL);
-    xTaskCreate(encBTask, "encB", 1024*2, (void *)&encBParams, configMAX_PRIORITIES - 1, NULL);
+    xTaskCreate(encTask, "encA", 1024*4, (void *)&encAParams, configMAX_PRIORITIES - 1, NULL);
+    xTaskCreate(encTask, "encB", 1024*4, (void *)&encBParams, configMAX_PRIORITIES - 1, NULL);
 
     bool pin = 1;
     while(1) {
+
+        vbat_assign_state(&batteryState, SCALE_VBAT(vbat_filt));
+        if (VERBOSE) {
+            ESP_LOGI(TAG, "Battery State   : %s", batteryStateNames[batteryState]);
+            ESP_LOGI(TAG, "Heartbeat State : %s", gpio_status_names[pin]);
+        }
         gpio_set_level(HEARTBEAT_LED_PIN, pin);
         pin = !pin;
-        vbat_assign_state(&batteryState, SCALE_VBAT(vbat_filt));
-        //ESP_LOGI(TAG, "STATE: %s", batteryStateNames[batteryState]);
-        if (timer0Flag) {
-            ESP_LOGI(TAG, "\n\n!! XX FART XX !!\n\n");
-            timer0Flag = false;
-        }
 
-        if (timer1Flag) {
-            ESP_LOGI(TAG, "\n\n!! XX JIZZ XX !!\n\n");
-            timer1Flag = false;
-        }
         vTaskDelay(HEARTBEAT_BLINK_PERIOD_MS / portTICK_PERIOD_MS);
     }
 }

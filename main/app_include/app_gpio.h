@@ -16,6 +16,10 @@ extern "C" {
 // --------------- Includes --------------- //
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 // DIGITAL OUTPUTS
 #define LOWBATT_LED_PIN         GPIO_NUM_2
@@ -24,7 +28,33 @@ extern "C" {
 
 #define HEARTBEAT_BLINK_PERIOD_MS 100
 
+#define KEYPRESS_COMBO_LENGTH   3
+#define NUM_COMBOS              8
+#define COMBO_CHECK_DELAY       1
+
+// Typedefs
+typedef enum {
+    LOW,
+    HIGH
+} gpio_status_t;
+
+typedef struct {
+    int buffer[KEYPRESS_COMBO_LENGTH];  // Buffer to store keypresses
+    int head;  // Index of the first element in the buffer
+    int tail;  // Index of the next empty slot in the buffer
+    SemaphoreHandle_t mutex;  // Mutex to protect buffer access
+    int size;  // Size of the circular buffer
+} circularBuffer;
+
+extern const char * gpio_status_names[2];
+extern const uint8_t keypress_combos[KEYPRESS_COMBO_LENGTH][NUM_COMBOS];
+extern const char * keypress_combo_names[NUM_COMBOS];
+
 void app_gpio_init(void);
+void init_buffer(circularBuffer *cb);
+void push_key(circularBuffer *cb, uint8_t key);
+uint8_t pop_key(circularBuffer *cb);
+bool check_combo(circularBuffer *cb, uint8_t * target);
 
 #ifdef __cplusplus
 }
