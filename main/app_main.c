@@ -100,6 +100,9 @@ volatile bool toggle_on_off_flag = false;
 SemaphoreHandle_t xChannelFlagSemaphore;
 SemaphoreHandle_t xToggleOnOffFlagSemaphore;
 
+bool swAlevel = LOW;
+bool swBlevel = LOW;
+
 
 /*================================ FUNCTION AND TASK DEFINITIONS ===================================*/
 
@@ -688,10 +691,12 @@ static void displayTask(void *pvParameter) {
         disp_backlight_set(bl, SCALE_VPOT_INVERT(vpotd_filt));
         lv_event_send(arc2, LV_EVENT_VALUE_CHANGED, NULL);
         lv_event_send(arc3, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_set_style_bg_color(arc0, lv_color_hex(knobColors[stateA.sw_status]), LV_PART_KNOB);
-        lv_obj_set_style_bg_color(arc1, lv_color_hex(knobColors[stateB.sw_status]), LV_PART_KNOB);
+        lv_obj_set_style_bg_color(arc0, lv_color_hex(knobColors[encA.state.sw_status]), LV_PART_KNOB);
+        lv_obj_set_style_bg_color(arc1, lv_color_hex(knobColors[encB.state.sw_status]), LV_PART_KNOB);
 
-        if (stateA.sw_status && stateB.sw_status) { // Swap the displayed image on concurrent encoder switch presses
+        
+        if (encA.state.sw_status && encB.state.sw_status) {
+        //if (encA.state.sw_status && stateB.sw_status) { // Swap the displayed image on concurrent encoder switch presses
             lv_obj_add_flag(app_images[activeImage], LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(app_images[!activeImage], LV_OBJ_FLAG_HIDDEN);
             activeImage = !activeImage;
